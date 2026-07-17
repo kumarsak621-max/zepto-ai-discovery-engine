@@ -2,20 +2,16 @@
 Zepto AI Discovery Engine
 AI-Powered Customer Intelligence Assistant for Product Managers
 
-Entry point for local + Railway:
-  python app.py
+Streamlit Community Cloud entry point:
+  streamlit run app.py
 """
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Path bootstrap — must run before any `src.*` imports (Railway / python app.py)
-# ---------------------------------------------------------------------------
+# Path bootstrap — must run before any `src.*` imports
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -28,54 +24,23 @@ try:
 except ImportError:
     pass
 
-_BOOTSTRAP_FLAG = "ZEPTO_STREAMLIT_BOOTSTRAPPED"
-
-
-def _should_bootstrap_streamlit() -> bool:
-    """Launch Streamlit only for a direct `python app.py` invocation."""
-    if __name__ != "__main__":
-        return False
-    if os.environ.get(_BOOTSTRAP_FLAG) == "1":
-        return False
-    # Already inside Streamlit runtime (e.g. `streamlit run app.py`)
-    if "streamlit.runtime" in sys.modules or "streamlit.web" in sys.modules:
-        return False
-    argv0 = Path(sys.argv[0]).name.lower()
-    if "streamlit" in argv0:
-        return False
-    return True
-
-
-if _should_bootstrap_streamlit():
-    os.environ[_BOOTSTRAP_FLAG] = "1"
-    port = int(os.environ.get("PORT", "8000"))
-    host = os.environ.get("HOST", "0.0.0.0")
-    cmd = [
-        sys.executable,
-        "-m",
-        "streamlit",
-        "run",
-        str(Path(__file__).resolve()),
-        f"--server.port={port}",
-        f"--server.address={host}",
-        "--server.headless=true",
-        "--browser.gatherUsageStats=false",
-        "--server.enableCORS=false",
-        "--server.enableXsrfProtection=false",
-    ]
-    raise SystemExit(subprocess.call(cmd))
-
-
-# ---------------------------------------------------------------------------
-# Streamlit UI
-# ---------------------------------------------------------------------------
 import streamlit as st
 
-from src.config import has_gemini, has_reddit, validate_runtime_config
-from src.database import get_collection_stats, init_db
-from src.rag_pipeline import collection_stats
-
-_config_warnings = validate_runtime_config()
+from src.config import (
+    PLAYSTORE_REVIEW_COUNT,
+    has_gemini,
+    has_reddit,
+    validate_runtime_config,
+)
+from src.paths import ensure_runtime_dirs
+from src.streamlit_cache import cached_collection_stats, cached_vector_stats, clear_data_caches
+from src.streamlit_playstore import (
+    format_last_updated,
+    render_last_updated_caption,
+    render_sidebar_fetch_controls,
+    run_fetch_with_progress,
+    show_fetch_result,
+)
 
 st.set_page_config(
     page_title="Zepto AI Discovery Engine",
@@ -85,10 +50,18 @@ st.set_page_config(
 )
 
 try:
+    ensure_runtime_dirs()
+    from src.database import init_db
+
     init_db()
 except Exception as exc:
-    st.error(f"Failed to initialize database: {exc}")
+    st.error(
+        "Could not prepare the app storage folders or database. "
+        f"Please retry in a moment. Details: {exc}"
+    )
     st.stop()
+
+_config_warnings = validate_runtime_config()
 
 st.markdown(
     """
@@ -129,6 +102,10 @@ h1, h2, h3 {
 }
 .ok { background: #D8F3DC; color: #1B4332; }
 .warn { background: #FFF3CD; color: #856404; }
+@media (max-width: 768px) {
+  .hero { padding: 1.4rem 1.1rem; }
+  .hero h1 { font-size: 1.55rem !important; }
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -147,17 +124,26 @@ st.markdown(
 for warning in _config_warnings:
     st.warning(warning)
 
-stats = get_collection_stats()
-vs = collection_stats()
+render_sidebar_fetch_controls()
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total feedback", f"{stats['total']:,}")
-c2.metric("Reviews in SQLite", f"{vs.get('count', 0):,}")
-c3.metric("Sources active", len(stats.get("by_source") or {}))
-c4.metric(
-    "Last update",
-    (stats.get("last_update") or "—")[:19] if stats.get("last_update") else "—",
+try:
+    stats = cached_collection_stats()
+    vs = cached_vector_stats()
+except Exception as exc:
+    st.error(f"Could not load dashboard metrics right now. Details: {exc}")
+    stats, vs = {"total": 0, "by_source": {}, "avg_rating": None}, {"count": 0}
+
+render_last_updated_caption()
+
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Total Reviews", f"{stats.get('total', 0):,}")
+c2.metric(
+    "Average Rating",
+    f"{stats['avg_rating']:.2f}" if stats.get("avg_rating") is not None else "—",
 )
+c3.metric("Reviews in SQLite", f"{vs.get('count', 0):,}")
+c4.metric("Sources active", len(stats.get("by_source") or {}))
+c5.metric("Last Updated", format_last_updated())
 
 st.subheader("System readiness")
 col_a, col_b, col_c = st.columns(3)
@@ -199,27 +185,57 @@ Use the sidebar pages:
 """
 )
 
-qa1, qa2 = st.columns(2)
-with qa1:
-    if st.button("▶ Run full data pipeline now", type="primary", use_container_width=True):
-        with st.spinner("Collecting → cleaning → analyzing..."):
-            from src.data_pipeline import run_full_pipeline
+force_home = st.checkbox(
+    "Force refresh Play Store cache",
+    value=False,
+    key="home_force_playstore_refresh",
+)
 
-            result = run_full_pipeline()
+qa1, qa2, qa3 = st.columns(3)
+with qa1:
+    if st.button(
+        "📥 Fetch Latest Google Play Reviews",
+        type="primary",
+        use_container_width=True,
+        key="home_fetch_playstore",
+    ):
+        result = run_fetch_with_progress(
+            force_refresh=force_home,
+            count=PLAYSTORE_REVIEW_COUNT,
+        )
+        show_fetch_result(result)
         if result.get("status") == "success":
-            st.success(
-                f"Pipeline OK — new: {result.get('new_reviews', 0)}, "
-                f"analyzed: {result.get('analyzed_count', 0)}"
-            )
+            clear_data_caches()
             st.rerun()
-        else:
-            st.error(f"Pipeline failed: {result.get('error', 'unknown error')}")
 
 with qa2:
+    if st.button("▶ Run full data pipeline", use_container_width=True):
+        try:
+            with st.spinner("Collecting all sources → cleaning → analyzing..."):
+                from src.data_pipeline import run_full_pipeline
+
+                result = run_full_pipeline()
+            if result.get("status") == "success":
+                clear_data_caches()
+                st.success(
+                    f"Pipeline OK — new: {result.get('new_reviews', 0)}, "
+                    f"analyzed: {result.get('analyzed_count', 0)}"
+                )
+                st.rerun()
+            else:
+                st.error(
+                    "Pipeline could not finish. "
+                    f"{result.get('error', 'Please try again later.')}"
+                )
+        except Exception as exc:
+            st.error(f"Pipeline failed unexpectedly. Details: {exc}")
+
+with qa3:
     st.info(
-        "For unattended daily runs:\n\n"
-        "`python scheduler.py`\n\n"
-        "One-shot: `python scheduler.py --once`"
+        f"Fetches up to **{PLAYSTORE_REVIEW_COUNT}** English Google Play reviews for "
+        f"`com.zeptoconsumerapp`, saves `data/reviews.csv`, caches while fresh, "
+        "runs Gemini analysis, and refreshes Insights + Chatbot.\n\n"
+        "Local daily job: `python scheduler.py`"
     )
 
 if stats.get("by_source"):
@@ -227,6 +243,6 @@ if stats.get("by_source"):
     st.bar_chart(stats["by_source"])
 else:
     st.warning(
-        "No feedback collected yet. Click **Run full data pipeline now** "
-        "or configure API keys in `.env` / Railway variables and re-run."
+        "No feedback collected yet. Click **📥 Fetch Latest Google Play Reviews** "
+        "in the sidebar (or below), or configure API keys in `.env` / Streamlit Secrets."
     )

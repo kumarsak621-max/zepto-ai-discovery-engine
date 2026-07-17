@@ -7,6 +7,12 @@ venv/
 env/
 database/*.db
 .streamlit/secrets.toml
+data/reviews.csv
+data/reviews_cache_meta.json
+cache/*
+!cache/.gitkeep
+output/*
+!output/.gitkeep
 *.log
 .DS_Store
 .cache/

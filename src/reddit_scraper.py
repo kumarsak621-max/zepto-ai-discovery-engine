@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 def _get_reddit_client():
     if not has_reddit():
         raise RuntimeError(
-            "Reddit credentials missing. Set REDDIT_CLIENT_ID and REDDIT_SECRET in .env"
+            "Reddit credentials missing. Set REDDIT_CLIENT_ID and "
+            "REDDIT_CLIENT_SECRET in Streamlit Secrets / .env"
         )
     import praw
 

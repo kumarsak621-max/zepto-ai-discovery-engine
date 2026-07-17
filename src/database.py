@@ -334,6 +334,13 @@ def get_collection_stats(db_path: Path | None = None) -> dict[str, Any]:
         last_row = conn.execute(
             "SELECT MAX(updated_at) AS last_update FROM reviews"
         ).fetchone()
+        avg_row = conn.execute(
+            """
+            SELECT AVG(rating) AS avg_rating, COUNT(rating) AS rated_count
+            FROM reviews
+            WHERE rating IS NOT NULL
+            """
+        ).fetchone()
         last_run = conn.execute(
             """
             SELECT * FROM pipeline_runs
@@ -350,11 +357,14 @@ def get_collection_stats(db_path: Path | None = None) -> dict[str, Any]:
             """
         ).fetchall()
 
+    avg_rating = avg_row["avg_rating"] if avg_row else None
     return {
         "total": total,
         "by_source": by_source,
         "by_sentiment": by_sentiment,
         "by_theme": by_theme,
+        "avg_rating": float(avg_rating) if avg_rating is not None else None,
+        "rated_count": int(avg_row["rated_count"] or 0) if avg_row else 0,
         "last_update": last_row["last_update"] if last_row else None,
         "last_run": dict(last_run) if last_run else None,
         "top_complaints": [{"theme": r["theme"], "count": r["c"]} for r in complaints],
@@ -384,15 +394,29 @@ def get_pm_insights(db_path: Path | None = None, limit: int = 2000) -> dict[str,
     segment_counter: Counter = Counter()
     opportunity_counter: Counter = Counter()
     exploration_segments: Counter = Counter()
+    root_cause_counter: Counter = Counter()
+    category_counter: Counter = Counter()
+    habit_counter: Counter = Counter()
 
     barrier_examples: dict[str, list[str]] = {}
     opportunity_examples: dict[str, dict[str, Any]] = {}
+    ratings: list[float] = []
+
+    for r in reviews:
+        rating = r.get("rating")
+        if rating is not None:
+            try:
+                ratings.append(float(rating))
+            except (TypeError, ValueError):
+                pass
 
     for r in analyzed:
         theme = (r.get("theme") or "").strip()
         pain = (r.get("pain_point") or "").strip()
         segment = (r.get("customer_segment") or "").strip()
         opportunity = (r.get("product_opportunity") or "").strip()
+        root = (r.get("root_cause") or "").strip()
+        category = (r.get("category") or "").strip()
         summary = (r.get("review_summary") or r.get("text") or "")[:140]
 
         if theme:
@@ -403,6 +427,13 @@ def get_pm_insights(db_path: Path | None = None, limit: int = 2000) -> dict[str,
             pain_counter[pain_key] += 1
         if segment:
             segment_counter[segment] += 1
+        if root:
+            root_cause_counter[root[:100]] += 1
+        if category and category.lower() not in {"app_review", "general", ""}:
+            category_counter[category] += 1
+        if theme == "Habitual buying" or segment == "Habitual grocery buyer":
+            habit_key = segment or theme or "Habitual shopping"
+            habit_counter[habit_key] += 1
         if opportunity:
             opportunity_counter[opportunity[:120]] += 1
             if opportunity[:120] not in opportunity_examples:
@@ -437,10 +468,34 @@ def get_pm_insights(db_path: Path | None = None, limit: int = 2000) -> dict[str,
         reverse=True,
     )[:8]
 
+    top_problems = _top_n(pain_counter, 10)
+    top_themes = _top_n(theme_counter, 12)
+    top_roots = _top_n(root_cause_counter, 8)
+    avg_rating = round(sum(ratings) / len(ratings), 2) if ratings else None
+
+    # Lightweight AI-style executive summary from aggregated signals
+    problem_bits = ", ".join(p["label"] for p in top_problems[:3]) or "mixed feedback"
+    theme_bits = ", ".join(t["label"] for t in top_themes[:3]) or "general themes"
+    root_bits = ", ".join(r["label"] for r in top_roots[:2]) or "unspecified causes"
+    ai_summary = (
+        f"Across {len(reviews):,} reviews"
+        + (f" (avg ⭐ {avg_rating})" if avg_rating is not None else "")
+        + f", top pain points are {problem_bits}. "
+        f"Dominant themes: {theme_bits}. "
+        f"Likely root causes: {root_bits}. "
+        f"{len(analyzed):,} reviews have structured AI analysis ready for the PM chatbot."
+    )
+
     return {
         "analyzed_count": len(analyzed),
-        "top_customer_problems": _top_n(pain_counter, 10),
-        "most_frequent_themes": _top_n(theme_counter, 12),
+        "total_reviews": len(reviews),
+        "avg_rating": avg_rating,
+        "top_customer_problems": top_problems,
+        "most_frequent_themes": top_themes,
+        "shopping_habits": _top_n(habit_counter, 8),
+        "product_categories": _top_n(category_counter, 10),
+        "root_causes": top_roots,
+        "ai_summary": ai_summary,
         "category_exploration_barriers": [
             {
                 "barrier": item["label"],

@@ -13,44 +13,73 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.database import (
-    fetch_all_reviews,
-    get_collection_stats,
-    get_pm_insights,
-    init_db,
+from src.database import init_db
+from src.paths import ensure_runtime_dirs
+from src.streamlit_cache import (
+    cached_collection_stats,
+    cached_pm_insights,
+    cached_reviews,
+    clear_data_caches,
+)
+from src.streamlit_playstore import (
+    format_last_updated,
+    render_last_updated_caption,
+    render_sidebar_fetch_controls,
 )
 
 st.set_page_config(page_title="Customer Insights", page_icon="💡", layout="wide")
-init_db()
+
+try:
+    ensure_runtime_dirs()
+    init_db()
+except Exception as exc:
+    st.error(f"Could not initialize storage. Details: {exc}")
+    st.stop()
+
+render_sidebar_fetch_controls()
 
 st.title("💡 Customer Insights")
 st.caption(
     "Aggregated AI analysis for Zepto PMs — problems, themes, exploration barriers, "
     "segments, and product opportunities."
 )
+render_last_updated_caption()
 
-stats = get_collection_stats()
-insights = get_pm_insights()
-reviews = fetch_all_reviews(limit=2000)
+try:
+    stats = cached_collection_stats()
+    insights = cached_pm_insights()
+    reviews = cached_reviews(limit=2000)
+except Exception as exc:
+    st.error(f"Could not load insights. Details: {exc}")
+    st.stop()
 
 if not reviews:
-    st.warning("No analyzed feedback yet. Run the data pipeline first.")
+    st.warning(
+        "No analyzed feedback yet. Use **📥 Fetch Latest Google Play Reviews** "
+        "in the sidebar to download and analyze reviews."
+    )
     st.stop()
 
 df = pd.DataFrame(reviews)
 df["date_parsed"] = pd.to_datetime(df["date"], errors="coerce", utc=True)
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Analyzed reviews", f"{insights.get('analyzed_count', 0):,}")
-m2.metric("Unique themes", len(insights.get("most_frequent_themes") or []))
-m3.metric(
-    "Exploration barriers",
-    sum(b["count"] for b in insights.get("category_exploration_barriers") or []),
+m1, m2, m3, m4, m5 = st.columns(5)
+m1.metric("Total Reviews", f"{insights.get('total_reviews', len(reviews)):,}")
+m2.metric(
+    "Average Rating",
+    f"{insights['avg_rating']:.2f}"
+    if insights.get("avg_rating") is not None
+    else (
+        f"{stats['avg_rating']:.2f}" if stats.get("avg_rating") is not None else "—"
+    ),
 )
-m4.metric(
-    "Product opportunities",
-    len(insights.get("recommended_product_opportunities") or []),
-)
+m3.metric("Analyzed reviews", f"{insights.get('analyzed_count', 0):,}")
+m4.metric("Unique themes", len(insights.get("most_frequent_themes") or []))
+m5.metric("Last Updated", format_last_updated())
+
+st.markdown("---")
+st.subheader("AI Summary")
+st.info(insights.get("ai_summary") or "Run analysis to generate an AI summary.")
 
 st.markdown("---")
 
@@ -196,10 +225,62 @@ if opps:
 else:
     st.info("Product opportunities are generated during advanced review analysis.")
 
+# ---- Shopping habits / product categories / root causes ----
+st.markdown("---")
+h1, h2, h3 = st.columns(3)
+with h1:
+    st.subheader("Shopping Habits")
+    habits = insights.get("shopping_habits") or []
+    if habits:
+        hdf = pd.DataFrame(habits).rename(columns={"label": "habit"})
+        st.dataframe(hdf, use_container_width=True, hide_index=True)
+        fig_h = px.bar(
+            hdf,
+            x="count",
+            y="habit",
+            orientation="h",
+            color="count",
+            color_continuous_scale=["#95D5B2", "#1B4332"],
+        )
+        fig_h.update_layout(
+            yaxis={"categoryorder": "total ascending"},
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            height=280,
+            margin=dict(l=10, r=10, t=10, b=10),
+            showlegend=False,
+        )
+        st.plotly_chart(fig_h, use_container_width=True)
+    else:
+        st.info("Habitual shopping signals appear after analysis.")
+with h2:
+    st.subheader("Product Categories")
+    cats = insights.get("product_categories") or []
+    if cats:
+        cdf = pd.DataFrame(cats).rename(columns={"label": "category"})
+        fig_c = px.pie(
+            cdf,
+            names="category",
+            values="count",
+            hole=0.4,
+            color_discrete_sequence=px.colors.sequential.Tealgrn,
+        )
+        st.plotly_chart(fig_c, use_container_width=True)
+    else:
+        st.info("Product categories appear after Gemini tags reviews.")
+with h3:
+    st.subheader("Root Causes")
+    roots = insights.get("root_causes") or []
+    if roots:
+        rdf = pd.DataFrame(roots).rename(columns={"label": "root_cause"})
+        st.dataframe(rdf, use_container_width=True, hide_index=True, height=320)
+    else:
+        st.info("Root causes appear after advanced analysis.")
+
 st.markdown("---")
 
 # ---- Sentiment trends (kept for continuity) ----
-st.subheader("Sentiment trends")
+st.subheader("Sentiment Distribution")
 col1, col2 = st.columns([1, 1])
 with col1:
     sent = stats.get("by_sentiment") or {}
@@ -277,9 +358,13 @@ st.dataframe(sample[cols].head(25), use_container_width=True, hide_index=True)
 
 st.markdown("---")
 if st.button("↻ Re-run advanced analysis on pending reviews", type="primary"):
-    with st.spinner("Running advanced Gemini/fallback analysis..."):
-        from src.data_pipeline import run_analysis
+    try:
+        with st.spinner("Running advanced Gemini/fallback analysis..."):
+            from src.data_pipeline import run_analysis
 
-        a = run_analysis(batch_size=200)
-    st.success(f"Analyzed {a} reviews")
-    st.rerun()
+            a = run_analysis(batch_size=200)
+        clear_data_caches()
+        st.success(f"Analyzed {a} reviews")
+        st.rerun()
+    except Exception as exc:
+        st.error(f"Analysis failed. Details: {exc}")

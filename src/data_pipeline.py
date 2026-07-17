@@ -19,7 +19,14 @@ from src.database import (
     update_analysis,
 )
 from src.gemini_analysis import analyze_review
-from src.playstore_scraper import collect_playstore_reviews
+from src.playstore_scraper import (
+    cache_is_fresh,
+    collect_playstore_reviews,
+    fetch_app_metadata,
+    get_last_updated_timestamp,
+    load_reviews_from_csv,
+    save_reviews_csv,
+)
 from src.reddit_scraper import collect_reddit_or_empty
 from src.twitter_placeholder import collect_twitter_mentions
 
@@ -47,6 +54,7 @@ def run_collection() -> dict[str, int]:
 
     try:
         playstore = collect_playstore_reviews()
+        save_reviews_csv(playstore)
     except Exception as exc:
         logger.error("Play Store collection failed: %s", exc)
 
@@ -62,6 +70,107 @@ def run_collection() -> dict[str, int]:
         "twitter_count": len(twitter),
         "new_reviews": inserted,
     }
+
+
+def run_playstore_fetch(
+    count: int | None = None,
+    analyze_limit: int = 500,
+    force_refresh: bool = False,
+    progress_callback: Any | None = None,
+) -> dict[str, Any]:
+    """
+    Fetch latest Google Play reviews for Zepto (com.zeptoconsumerapp):
+
+    1. Use cache (data/reviews.csv) when fresh unless force_refresh
+    2. Otherwise download English reviews from Google Play
+    3. Dedupe + save CSV
+    4. Upsert into feedback.db
+    5. Run Gemini analysis so dashboards + chatbot update
+    """
+    from src.config import PLAYSTORE_CACHE_TTL_HOURS, PLAYSTORE_REVIEW_COUNT
+
+    init_db()
+    run_id = start_pipeline_run()
+    counts: dict[str, int] = {
+        "playstore_count": 0,
+        "reddit_count": 0,
+        "twitter_count": 0,
+        "new_reviews": 0,
+        "analyzed_count": 0,
+    }
+    metadata: dict[str, Any] = {}
+    used_cache = False
+    download_timestamp = get_last_updated_timestamp()
+    target_count = count or PLAYSTORE_REVIEW_COUNT
+
+    def _progress(pct: float, msg: str) -> None:
+        if progress_callback:
+            progress_callback(pct, msg)
+
+    try:
+        _progress(0.02, "Preparing Google Play fetch…")
+        try:
+            metadata = fetch_app_metadata()
+        except Exception as meta_exc:
+            logger.warning("Play Store metadata fetch failed: %s", meta_exc)
+
+        ttl = int(PLAYSTORE_CACHE_TTL_HOURS) * 3600
+        if not force_refresh and cache_is_fresh(ttl_seconds=ttl):
+            _progress(0.35, "Using cached reviews (still fresh)…")
+            playstore = load_reviews_from_csv()
+            used_cache = True
+            download_timestamp = get_last_updated_timestamp()
+        else:
+            _progress(0.08, "Downloading latest English reviews from Google Play…")
+            playstore = collect_playstore_reviews(
+                count=target_count,
+                lang="en",
+                country="in",
+                progress_callback=_progress,
+            )
+            if not playstore:
+                raise RuntimeError(
+                    "No reviews returned from Google Play. The service may be temporarily unavailable."
+                )
+            _progress(0.92, "Saving reviews to data/reviews.csv…")
+            save_reviews_csv(playstore)
+            download_timestamp = get_last_updated_timestamp()
+
+        cleaned = _clean_records(playstore)
+        _progress(0.94, "Updating feedback.db…")
+        inserted = bulk_upsert(cleaned)
+        counts["playstore_count"] = len(playstore)
+        counts["new_reviews"] = inserted
+
+        _progress(0.96, "Running Gemini review analysis…")
+        analyzed = run_analysis(batch_size=max(analyze_limit, len(cleaned) or 1))
+        counts["analyzed_count"] = analyzed
+
+        _progress(1.0, "Done")
+        finish_pipeline_run(run_id, status="success", counts=counts)
+        return {
+            "status": "success",
+            "run_id": run_id,
+            "app_metadata": metadata,
+            "used_cache": used_cache,
+            "download_timestamp": download_timestamp,
+            "reviews_csv": "data/reviews.csv",
+            **counts,
+        }
+    except Exception as exc:
+        logger.exception("Play Store fetch pipeline failed")
+        finish_pipeline_run(
+            run_id, status="failed", counts=counts, error_message=str(exc)
+        )
+        return {
+            "status": "failed",
+            "run_id": run_id,
+            "error": str(exc),
+            "app_metadata": metadata,
+            "used_cache": used_cache,
+            "download_timestamp": download_timestamp,
+            **counts,
+        }
 
 
 def run_analysis(batch_size: int = 100) -> int:
