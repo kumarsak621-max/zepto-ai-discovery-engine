@@ -9,8 +9,6 @@ from typing import Any
 
 from src.config import (
     CUSTOMER_SEGMENTS,
-    GEMINI_API_KEY,
-    GEMINI_MODEL,
     INTENT_TAXONOMY,
     SENTIMENT_VALUES,
     THEME_TAXONOMY,
@@ -57,10 +55,13 @@ STRUCTURED_KEYS = (
 
 
 def _get_model():
+    # Resolve key/model from the single config source (Secrets → .env)
     if not has_gemini():
         raise RuntimeError(
-            "GEMINI_API_KEY is not configured. Add it to .env to enable AI analysis."
+            "GEMINI_API_KEY is not configured. "
+            "Set it in .env locally or in Streamlit Cloud Secrets."
         )
+    from src.config import GEMINI_API_KEY, GEMINI_MODEL
     import google.generativeai as genai
 
     genai.configure(api_key=GEMINI_API_KEY)

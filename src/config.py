@@ -75,8 +75,43 @@ DATABASE_PATH = (
 
 COLLECTION_NAME = "zepto_customer_feedback"
 
-GEMINI_API_KEY = _env_str("GEMINI_API_KEY", "")
-GEMINI_MODEL = _env_str("GEMINI_MODEL", "gemini-2.0-flash")
+
+def get_gemini_api_key() -> str:
+    """
+    Single source for the Gemini API key.
+
+    Order:
+      1. Streamlit Secrets — st.secrets.get("GEMINI_API_KEY", "")
+      2. Environment / .env — os.getenv("GEMINI_API_KEY", "")
+    """
+    try:
+        import streamlit as st
+
+        key = st.secrets.get("GEMINI_API_KEY", "")
+        if key is not None and str(key).strip():
+            return str(key).strip()
+    except Exception:
+        # Outside Streamlit, or secrets not configured yet
+        pass
+    return (os.getenv("GEMINI_API_KEY", "") or "").strip()
+
+
+def get_gemini_model() -> str:
+    """Gemini model name from Streamlit Secrets, then env / .env."""
+    try:
+        import streamlit as st
+
+        model = st.secrets.get("GEMINI_MODEL", "")
+        if model is not None and str(model).strip():
+            return str(model).strip()
+    except Exception:
+        pass
+    return (os.getenv("GEMINI_MODEL", "") or "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+
+
+# Public config values used across the app (never hardcode secrets)
+GEMINI_API_KEY = get_gemini_api_key()
+GEMINI_MODEL = get_gemini_model()
 
 REDDIT_CLIENT_ID = _env_str("REDDIT_CLIENT_ID", "")
 REDDIT_CLIENT_SECRET = _first_env("REDDIT_CLIENT_SECRET", "REDDIT_SECRET", default="")
@@ -165,7 +200,12 @@ EXPLORATION_BARRIER_THEMES = [
 
 
 def has_gemini() -> bool:
-    return bool(GEMINI_API_KEY and GEMINI_API_KEY != "your_gemini_api_key_here")
+    """True when a non-empty Gemini API key is available (Secrets or .env)."""
+    # Re-resolve so Streamlit Cloud Secrets work even if config imported early
+    global GEMINI_API_KEY, GEMINI_MODEL
+    GEMINI_API_KEY = get_gemini_api_key()
+    GEMINI_MODEL = get_gemini_model()
+    return bool(GEMINI_API_KEY.strip())
 
 
 def has_reddit() -> bool:

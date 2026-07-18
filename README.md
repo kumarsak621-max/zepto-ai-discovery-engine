@@ -62,8 +62,44 @@ zepto/
 ```bash
 pip install -r requirements.txt
 cp .env.example .env
-# Edit .env — add GEMINI_API_KEY (and optional Reddit keys)
 streamlit run app.py
+```
+
+---
+
+## Gemini API key setup
+
+The app reads `GEMINI_API_KEY` from **one place**: `src/config.py`.
+
+Order: Streamlit Secrets → `.env` / environment variable.  
+Never hardcode keys in source code.
+
+### Local
+
+Create a `.env` file in the project root:
+
+```env
+GEMINI_API_KEY=YOUR_API_KEY
+```
+
+Optional:
+
+```env
+GEMINI_MODEL=gemini-2.0-flash
+```
+
+### Streamlit Cloud
+
+App settings → **Secrets**:
+
+```toml
+GEMINI_API_KEY = "YOUR_API_KEY"
+```
+
+Optional:
+
+```toml
+GEMINI_MODEL = "gemini-2.0-flash"
 ```
 
 ---
@@ -72,7 +108,7 @@ streamlit run app.py
 
 | Variable | Required | Description |
 |---|---|---|
-| `GEMINI_API_KEY` | Recommended | Gemini analysis + chatbot |
+| `GEMINI_API_KEY` | Recommended | Gemini analysis + chatbot (Secrets or `.env`) |
 | `GEMINI_MODEL` | No | Default `gemini-2.0-flash` |
 | `PLAYSTORE_APP_ID` | No | Default `com.zeptoconsumerapp` |
 | `PLAYSTORE_REVIEW_COUNT` | No | Default `500` |
@@ -104,7 +140,12 @@ Chatbot tips:
 1. Push this repo to GitHub (**do not** commit `.env`)
 2. [share.streamlit.io](https://share.streamlit.io) → **New app**
 3. Main file path: `app.py`
-4. Secrets → paste from `.streamlit/secrets.toml.example`
+4. **Settings → Secrets** — add:
+
+   ```toml
+   GEMINI_API_KEY = "YOUR_API_KEY"
+   ```
+
 5. Deploy → click **🔄 Refresh Live Reviews**
 
 Note: Cloud storage is ephemeral — re-refresh after cold starts / redeploys.
