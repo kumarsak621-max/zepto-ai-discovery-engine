@@ -213,13 +213,15 @@ def retrieve_relevant(
     query: str,
     n_results: int = 8,
     where: dict[str, Any] | None = None,
+    sources: tuple[str, ...] | list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Keyword + SQL-friendly retrieval over feedback.db.
 
     1. Optional SQL filters (sentiment / theme / source / category)
-    2. Pandas keyword scoring across review text + AI analysis fields
-    3. Return top-N rows for Gemini PM synthesis
+    2. Optional allow-list of sources (e.g. Google Play only)
+    3. Pandas keyword scoring across review text + AI analysis fields
+    4. Return top-N rows for Gemini PM synthesis
     """
     query = (query or "").strip()
     if not query:
@@ -230,6 +232,13 @@ def retrieve_relevant(
     if df.empty:
         logger.info("No reviews in feedback.db for retrieval")
         return []
+
+    if sources and "source" in df.columns:
+        allowed = {str(s).lower() for s in sources}
+        df = df[df["source"].astype(str).str.lower().isin(allowed)]
+        if df.empty:
+            logger.info("No reviews matched allowed sources: %s", sources)
+            return []
 
     # Optional structured filters from caller
     if where:

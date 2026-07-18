@@ -9,10 +9,15 @@ database/*.db
 .streamlit/secrets.toml
 data/reviews.csv
 data/reviews_cache_meta.json
+data/merged_reviews.csv
+data/live_reviews_meta.json
 cache/*
 !cache/.gitkeep
+!cache/README.md
 output/*
 !output/.gitkeep
+!output/README.md
+!data/README.md
 *.log
 .DS_Store
 .cache/

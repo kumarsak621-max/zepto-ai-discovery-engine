@@ -30,7 +30,6 @@ SEED = 42
 SOURCES = [
     "Google Play Store",
     "App Store",
-    "Reddit",
     "Social Media",
 ]
 
@@ -575,7 +574,6 @@ def source_to_db(source: str) -> str:
     mapping = {
         "Google Play Store": "playstore",
         "App Store": "appstore",
-        "Reddit": "reddit",
         "Social Media": "social",
     }
     return mapping.get(source, source.lower().replace(" ", "_"))

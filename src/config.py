@@ -29,7 +29,6 @@ def _secret_or_env(name: str, default: str = "") -> str:
                     if value is not None and str(value).strip() != "":
                         return str(value).strip()
             except Exception:
-                # Secrets file missing / not configured on Streamlit Cloud yet
                 pass
     except Exception:
         pass
@@ -62,7 +61,6 @@ def _first_env(*names: str, default: str = "") -> str:
     return default
 
 
-# Ensure folders exist as soon as config loads (Streamlit Cloud ephemeral FS)
 try:
     ensure_runtime_dirs()
 except OSError as exc:
@@ -81,12 +79,12 @@ GEMINI_API_KEY = _env_str("GEMINI_API_KEY", "")
 GEMINI_MODEL = _env_str("GEMINI_MODEL", "gemini-2.0-flash")
 
 REDDIT_CLIENT_ID = _env_str("REDDIT_CLIENT_ID", "")
-# Prefer REDDIT_CLIENT_SECRET; keep REDDIT_SECRET as backward-compatible alias
 REDDIT_CLIENT_SECRET = _first_env("REDDIT_CLIENT_SECRET", "REDDIT_SECRET", default="")
-REDDIT_SECRET = REDDIT_CLIENT_SECRET  # alias used by existing scrapers
+REDDIT_SECRET = REDDIT_CLIENT_SECRET
 REDDIT_USER_AGENT = _env_str(
     "REDDIT_USER_AGENT", "zepto_ai_engine/1.0 by ZeptoPMResearch"
 )
+REDDIT_POST_LIMIT = _env_int("REDDIT_POST_LIMIT", 50)
 
 TWITTER_BEARER_TOKEN = _env_str("TWITTER_BEARER_TOKEN", "")
 
@@ -94,15 +92,29 @@ PLAYSTORE_APP_ID = _env_str("PLAYSTORE_APP_ID", "com.zeptoconsumerapp")
 PLAYSTORE_APP_NAME = "Zepto: Groceries in minutes"
 PLAYSTORE_REVIEW_COUNT = _env_int("PLAYSTORE_REVIEW_COUNT", 500)
 PLAYSTORE_CACHE_TTL_HOURS = _env_int("PLAYSTORE_CACHE_TTL_HOURS", 6)
-REDDIT_POST_LIMIT = _env_int("REDDIT_POST_LIMIT", 50)
+
+# Apple App Store (iTunes RSS) — Zepto: Groceries in minutes
+APPSTORE_APP_ID = _env_str("APPSTORE_APP_ID", "1575323645")
+APPSTORE_COUNTRY = _env_str("APPSTORE_COUNTRY", "in")
+APPSTORE_REVIEW_COUNT = _env_int("APPSTORE_REVIEW_COUNT", 200)
+APPSTORE_ENABLED = _env_str("APPSTORE_ENABLED", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+
 DAILY_SCHEDULE_HOUR = _env_int("DAILY_SCHEDULE_HOUR", 6)
+LIVE_CACHE_TTL_HOURS = _env_int("LIVE_CACHE_TTL_HOURS", 6)
 
 REVIEWS_CSV_PATH = DATA_DIR / "reviews.csv"
+LIVE_META_PATH = DATA_DIR / "live_reviews_meta.json"
+
+LIVE_CHAT_SOURCES = ("playstore", "appstore", "reddit")
 
 REDDIT_SUBREDDITS = [
     "india",
     "IndianFood",
-    "IndianGaming",
     "bangalore",
     "mumbai",
     "delhi",
@@ -111,7 +123,6 @@ REDDIT_SUBREDDITS = [
 REDDIT_KEYWORDS = [
     "Zepto",
     "quick commerce",
-    "Zepto experience",
     "Zepto review",
     "Blinkit vs Zepto",
     "online grocery shopping",
@@ -167,11 +178,11 @@ def has_reddit() -> bool:
     )
 
 
+def has_appstore() -> bool:
+    return bool(APPSTORE_ENABLED and APPSTORE_APP_ID)
+
+
 def validate_runtime_config() -> list[str]:
-    """
-    Return human-readable warnings for missing optional config.
-    Never raises — callers display warnings instead of crashing.
-    """
     warnings: list[str] = []
     try:
         ensure_runtime_dirs()
@@ -184,10 +195,7 @@ def validate_runtime_config() -> list[str]:
             "fallbacks until you add the key in Streamlit Cloud Secrets / .env."
         )
     if not has_reddit():
-        warnings.append(
-            "Reddit credentials are optional. Set REDDIT_CLIENT_ID and "
-            "REDDIT_CLIENT_SECRET in Streamlit Cloud Secrets to enable Reddit collection."
-        )
+        warnings.append("Reddit is not configured.")
     try:
         DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

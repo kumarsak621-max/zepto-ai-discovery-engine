@@ -41,7 +41,7 @@ render_sidebar_fetch_controls()
 st.title("💡 Customer Insights")
 st.caption(
     "Aggregated AI analysis for Zepto PMs — problems, themes, exploration barriers, "
-    "segments, and product opportunities."
+    "segments, and product opportunities from live fetched reviews."
 )
 render_last_updated_caption()
 

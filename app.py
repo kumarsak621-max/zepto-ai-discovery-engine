@@ -11,7 +11,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Path bootstrap — must run before any `src.*` imports
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -26,21 +25,12 @@ except ImportError:
 
 import streamlit as st
 
-from src.config import (
-    PLAYSTORE_REVIEW_COUNT,
-    has_gemini,
-    has_reddit,
-    validate_runtime_config,
-)
+from src.config import has_appstore, has_gemini, has_reddit, validate_runtime_config
+from src.data_pipeline import get_live_meta
 from src.paths import ensure_runtime_dirs
-from src.streamlit_cache import cached_collection_stats, cached_vector_stats, clear_data_caches
-from src.streamlit_playstore import (
-    format_last_updated,
-    render_last_updated_caption,
-    render_sidebar_fetch_controls,
-    run_fetch_with_progress,
-    show_fetch_result,
-)
+from src.streamlit_cache import cached_collection_stats, cached_vector_stats
+from src.streamlit_playstore import format_last_updated, render_sidebar_fetch_controls
+from src.streamlit_sources import render_live_review_controls
 
 st.set_page_config(
     page_title="Zepto AI Discovery Engine",
@@ -115,7 +105,7 @@ st.markdown(
     """
 <div class="hero">
   <h1>Zepto AI Discovery Engine</h1>
-  <p>AI-powered customer intelligence for Product Managers — automatically collect, analyze, and act on feedback.</p>
+  <p>AI-powered customer intelligence for Product Managers — automatically collect, analyze, and act on live reviews.</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -133,7 +123,10 @@ except Exception as exc:
     st.error(f"Could not load dashboard metrics right now. Details: {exc}")
     stats, vs = {"total": 0, "by_source": {}, "avg_rating": None}, {"count": 0}
 
-render_last_updated_caption()
+live_meta = get_live_meta()
+st.caption(
+    f"Last Updated: **{format_last_updated(live_meta.get('last_updated'))}**"
+)
 
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Total Reviews", f"{stats.get('total', 0):,}")
@@ -143,7 +136,7 @@ c2.metric(
 )
 c3.metric("Reviews in SQLite", f"{vs.get('count', 0):,}")
 c4.metric("Sources active", len(stats.get("by_source") or {}))
-c5.metric("Last Updated", format_last_updated())
+c5.metric("Last Updated", format_last_updated(live_meta.get("last_updated")))
 
 st.subheader("System readiness")
 col_a, col_b, col_c = st.columns(3)
@@ -155,94 +148,52 @@ with col_a:
     )
 with col_b:
     st.markdown(
-        f'<span class="status-pill {"ok" if has_reddit() else "warn"}">'
-        f'{"Reddit connected" if has_reddit() else "Reddit credentials optional"}</span>',
+        '<span class="status-pill ok">Google Play ready</span>',
         unsafe_allow_html=True,
     )
 with col_c:
+    if has_appstore():
+        label, cls = "App Store ready", "ok"
+    else:
+        label, cls = "App Store off", "warn"
     st.markdown(
-        '<span class="status-pill ok">Play Store scraper ready</span>',
+        f'<span class="status-pill {cls}">{label}</span>',
         unsafe_allow_html=True,
     )
+if not has_reddit():
+    st.caption("Reddit is not configured.")
 
 st.markdown("---")
 st.markdown(
     """
 ### What this tool does for PMs
 
-1. **Automatically collects** Play Store reviews and Reddit discussions about Zepto / quick commerce
+1. **Automatically collects** live Zepto reviews from Google Play (plus App Store / Reddit when configured)
 2. **Cleans & deduplicates** feedback into `feedback.db`
 3. **Analyzes** each item with Gemini for sentiment, theme, intent, and opportunities
-4. **Powers the PM chatbot** by filtering relevant reviews from SQLite and synthesizing insights with Gemini
+4. **Powers the PM chatbot** using fetched review evidence from SQLite
 
 Use the sidebar pages:
 
 - **Data Collection Status** — pipeline health & volume
 - **Customer Insights** — complaints, themes, sentiment
 - **AI Product Manager Chatbot** — ask research questions with evidence
-
-### Quick actions
 """
 )
 
-force_home = st.checkbox(
-    "Force refresh Play Store cache",
-    value=False,
-    key="home_force_playstore_refresh",
-)
-
-qa1, qa2, qa3 = st.columns(3)
-with qa1:
-    if st.button(
-        "📥 Fetch Latest Google Play Reviews",
-        type="primary",
-        use_container_width=True,
-        key="home_fetch_playstore",
-    ):
-        result = run_fetch_with_progress(
-            force_refresh=force_home,
-            count=PLAYSTORE_REVIEW_COUNT,
-        )
-        show_fetch_result(result)
-        if result.get("status") == "success":
-            clear_data_caches()
-            st.rerun()
-
-with qa2:
-    if st.button("▶ Run full data pipeline", use_container_width=True):
-        try:
-            with st.spinner("Collecting all sources → cleaning → analyzing..."):
-                from src.data_pipeline import run_full_pipeline
-
-                result = run_full_pipeline()
-            if result.get("status") == "success":
-                clear_data_caches()
-                st.success(
-                    f"Pipeline OK — new: {result.get('new_reviews', 0)}, "
-                    f"analyzed: {result.get('analyzed_count', 0)}"
-                )
-                st.rerun()
-            else:
-                st.error(
-                    "Pipeline could not finish. "
-                    f"{result.get('error', 'Please try again later.')}"
-                )
-        except Exception as exc:
-            st.error(f"Pipeline failed unexpectedly. Details: {exc}")
-
-with qa3:
-    st.info(
-        f"Fetches up to **{PLAYSTORE_REVIEW_COUNT}** English Google Play reviews for "
-        f"`com.zeptoconsumerapp`, saves `data/reviews.csv`, caches while fresh, "
-        "runs Gemini analysis, and refreshes Insights + Chatbot.\n\n"
-        "Local daily job: `python scheduler.py`"
-    )
+render_live_review_controls(key_prefix="home")
 
 if stats.get("by_source"):
-    st.subheader("Feedback by source")
+    st.subheader("Reviews collected by source")
+    src_cols = st.columns(max(len(stats["by_source"]), 1))
+    for i, (source_name, source_count) in enumerate(stats["by_source"].items()):
+        src_cols[i % len(src_cols)].metric(
+            str(source_name).replace("_", " ").title(),
+            f"{source_count:,}",
+        )
     st.bar_chart(stats["by_source"])
 else:
     st.warning(
-        "No feedback collected yet. Click **📥 Fetch Latest Google Play Reviews** "
-        "in the sidebar (or below), or configure API keys in `.env` / Streamlit Secrets."
+        "No feedback collected yet. Click **▶ Run Review Analysis** or "
+        "**🔄 Refresh Live Reviews** to download online reviews automatically."
     )

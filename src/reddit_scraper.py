@@ -22,10 +22,7 @@ logger = logging.getLogger(__name__)
 
 def _get_reddit_client():
     if not has_reddit():
-        raise RuntimeError(
-            "Reddit credentials missing. Set REDDIT_CLIENT_ID and "
-            "REDDIT_CLIENT_SECRET in Streamlit Secrets / .env"
-        )
+        raise RuntimeError("Reddit is not configured.")
     import praw
 
     return praw.Reddit(
@@ -46,13 +43,9 @@ def collect_reddit_discussions(
     keywords: list[str] | None = None,
     limit: int | None = None,
     include_comments: bool = True,
-    max_comments_per_post: int = 15,
+    max_comments_per_post: int = 5,
 ) -> list[dict[str, Any]]:
-    """
-    Search subreddits for Zepto / quick commerce discussions.
-
-    Stores post titles, comment text, dates, and upvotes.
-    """
+    """Search subreddits for Zepto / quick commerce discussions."""
     subreddits = subreddits or REDDIT_SUBREDDITS
     keywords = keywords or REDDIT_KEYWORDS
     limit = limit or REDDIT_POST_LIMIT
@@ -66,23 +59,21 @@ def collect_reddit_discussions(
         logger.info("Searching Reddit for '%s' across %s", query, subreddits)
         try:
             for submission in reddit.subreddit("+".join(subreddits)).search(
-                query, sort="new", limit=limit, time_filter="year"
+                query, sort="new", time_filter="month", limit=limit
             ):
                 post_id = f"post_{submission.id}"
                 if post_id in seen_ids:
                     continue
-                seen_ids.add(post_id)
-
-                title = clean_text(submission.title or "")
-                body = clean_text(submission.selftext or "")
-                combined = f"{title}. {body}".strip() if body else title
-                if not combined:
+                body = clean_text(
+                    f"{submission.title or ''}. {submission.selftext or ''}"
+                )
+                if len(body) < 20:
                     continue
-
+                seen_ids.add(post_id)
                 collected.append(
                     {
                         "source": "reddit",
-                        "text": combined,
+                        "text": body,
                         "rating": None,
                         "date": _ts_to_iso(getattr(submission, "created_utc", None)),
                         "category": "discussion",
@@ -90,7 +81,7 @@ def collect_reddit_discussions(
                         "theme": None,
                         "user_intent": None,
                         "app_version": None,
-                        "title": title,
+                        "title": clean_text(submission.title or "")[:200],
                         "upvotes": int(getattr(submission, "score", 0) or 0),
                         "external_id": post_id,
                     }
@@ -108,7 +99,6 @@ def collect_reddit_discussions(
                         body_c = clean_text(getattr(comment, "body", "") or "")
                         if not body_c or body_c in {"[deleted]", "[removed]"}:
                             continue
-                        # Keep Zepto-relevant comments preferentially
                         lower = body_c.lower()
                         if not any(
                             k.lower() in lower
@@ -121,7 +111,6 @@ def collect_reddit_discussions(
                                 "quick commerce",
                             )
                         ):
-                            # still keep high-upvote thread replies under Zepto posts
                             if int(getattr(comment, "score", 0) or 0) < 3:
                                 continue
 
@@ -139,7 +128,7 @@ def collect_reddit_discussions(
                                 "theme": None,
                                 "user_intent": None,
                                 "app_version": None,
-                                "title": title,
+                                "title": clean_text(submission.title or "")[:200],
                                 "upvotes": int(getattr(comment, "score", 0) or 0),
                                 "external_id": comment_id,
                             }
@@ -158,17 +147,10 @@ def collect_reddit_discussions(
 def collect_reddit_or_empty(**kwargs) -> list[dict[str, Any]]:
     """Safe wrapper — returns [] when credentials are missing."""
     if not has_reddit():
-        logger.warning("Skipping Reddit collection — credentials not configured")
+        logger.warning("Reddit is not configured — skipping")
         return []
     try:
         return collect_reddit_discussions(**kwargs)
     except Exception as exc:
         logger.error("Reddit collection error: %s", exc)
         return []
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    rows = collect_reddit_or_empty(limit=5, include_comments=False)
-    for row in rows[:5]:
-        print(f"[{row.get('upvotes')}] {row['title'][:80]}")

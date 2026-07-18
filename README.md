@@ -2,7 +2,9 @@
 
 **AI-Powered Customer Intelligence Assistant for Product Managers**
 
-Automatically collect customer feedback from Google Play Store and Reddit, analyze it with Gemini, store everything in SQLite (`feedback.db`), and ask product research questions with evidence-backed answers.
+Automatically collect **live** Zepto reviews from online sources (Google Play, optional App Store & Reddit), analyze them with Gemini, store everything in SQLite (`feedback.db`), and ask product research questions with evidence-backed answers.
+
+**No manual CSV upload.** Reviews are fetched online when you run analysis.
 
 Lightweight and **Streamlit Community Cloud** friendly — no ChromaDB, no embeddings, no torch.
 
@@ -12,12 +14,13 @@ Lightweight and **Streamlit Community Cloud** friendly — no ChromaDB, no embed
 
 | Capability | Description |
 |---|---|
-| **Google Play live fetch** | Download latest English Zepto reviews (`com.zeptoconsumerapp`) into `data/reviews.csv` |
-| **Gemini analysis** | Sentiment · Theme · Intent · Segment · Pain · Root cause · Opportunity |
-| **Insights dashboards** | Totals, ratings, sentiment, habits, segments, categories, AI summary |
-| **PM research chatbot** | Answers grounded in the latest analyzed reviews |
-| **Caching** | Play Store CSV cache + Streamlit `@st.cache_data` for dashboard metrics |
-| **Optional Reddit** | Collect discussions when Reddit credentials are configured |
+| **Live Google Play fetch** | Newest English Zepto reviews (`com.zeptoconsumerapp`) |
+| **Apple App Store** | Optional iTunes RSS reviews (`APPSTORE_APP_ID`) |
+| **Reddit** | Optional — only when API credentials are configured |
+| **Gemini analysis** | Sentiment · Theme · Intent · Segment · Pain · Opportunity |
+| **Insights dashboards** | Totals, ratings, sentiment, habits, segments, AI summary |
+| **PM chatbot** | Answers from fetched reviews; supports “latest / live reviews” |
+| **Refresh Live Reviews** | Force newest download + re-analysis |
 
 ---
 
@@ -25,33 +28,31 @@ Lightweight and **Streamlit Community Cloud** friendly — no ChromaDB, no embed
 
 ```
 zepto/
-├── app.py                      # Streamlit entry point
+├── app.py                 # Streamlit entry point
 ├── requirements.txt
 ├── README.md
 ├── .env.example
-├── scheduler.py                # Optional local daily job
-├── generate_reviews.py         # Optional synthetic data helper
-├── data/                       # reviews.csv (generated) + sample CSVs
-├── output/                     # Runtime outputs (auto-created)
-├── cache/                      # Cache folder (auto-created)
-├── database/                   # feedback.db (auto-created, not committed)
+├── data/                  # Review cache + merged datasets (auto-created)
+├── output/                # Runtime outputs (auto-created)
+├── cache/                 # Cache dir (auto-created)
+├── database/              # feedback.db (auto-created)
 ├── pages/
 │   ├── 1_Data_Collection_Status.py
 │   ├── 2_Customer_Insights.py
 │   └── 3_AI_Product_Manager_Chatbot.py
-├── src/
-│   ├── config.py
-│   ├── paths.py
-│   ├── playstore_scraper.py
-│   ├── data_pipeline.py
-│   ├── gemini_analysis.py
-│   ├── rag_pipeline.py
-│   ├── chatbot.py
-│   ├── database.py
-│   └── ...
-└── .streamlit/
-    ├── config.toml
-    └── secrets.toml.example
+└── src/
+    ├── config.py
+    ├── paths.py
+    ├── playstore_scraper.py
+    ├── appstore_scraper.py
+    ├── reddit_scraper.py
+    ├── data_pipeline.py
+    ├── gemini_analysis.py
+    ├── rag_pipeline.py
+    ├── chatbot.py
+    ├── database.py
+    ├── streamlit_sources.py
+    └── ...
 ```
 
 ---
@@ -59,16 +60,11 @@ zepto/
 ## Installation
 
 ```bash
-git clone <your-repo-url>
-cd zepto
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
+# Edit .env — add GEMINI_API_KEY (and optional Reddit keys)
+streamlit run app.py
 ```
-
-Edit `.env` with your keys (never commit `.env`).
 
 ---
 
@@ -76,88 +72,55 @@ Edit `.env` with your keys (never commit `.env`).
 
 | Variable | Required | Description |
 |---|---|---|
-| `GEMINI_API_KEY` | Recommended | Google Gemini API key for analysis + chatbot |
+| `GEMINI_API_KEY` | Recommended | Gemini analysis + chatbot |
 | `GEMINI_MODEL` | No | Default `gemini-2.0-flash` |
-| `REDDIT_CLIENT_ID` | No | Reddit app client id |
-| `REDDIT_CLIENT_SECRET` | No | Reddit app secret (`REDDIT_SECRET` still accepted as alias) |
-| `REDDIT_USER_AGENT` | No | Reddit user agent string |
 | `PLAYSTORE_APP_ID` | No | Default `com.zeptoconsumerapp` |
 | `PLAYSTORE_REVIEW_COUNT` | No | Default `500` |
-| `PLAYSTORE_CACHE_TTL_HOURS` | No | Default `6` |
+| `APPSTORE_APP_ID` | No | Default `1575323645` (Zepto iOS) |
+| `APPSTORE_ENABLED` | No | `1` on / `0` off |
+| `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` | No | If missing: *Reddit is not configured.* |
+| `LIVE_CACHE_TTL_HOURS` | No | Default `6` |
 
-Play Store collection needs **no API key**. Without Gemini, rule-based analysis still runs.
-
----
-
-## Run locally
-
-```bash
-streamlit run app.py
-```
-
-Then open the URL Streamlit prints (usually `http://localhost:8501`).
-
-Sidebar:
-
-1. **Data Collection Status** — pipeline health & volume  
-2. **Customer Insights** — problems, themes, sentiment, habits, opportunities  
-3. **AI Product Manager Chatbot** — research questions with evidence  
-
-Fetch reviews with **📥 Fetch Latest Google Play Reviews** in the sidebar.
-
-Optional local scheduler:
-
-```bash
-python scheduler.py --once
-python scheduler.py
-```
+Google Play and App Store need **no API keys**. Without Gemini, rule-based analysis still runs.
 
 ---
 
-## Deploy on Streamlit Community Cloud
+## Usage
 
-1. Push this repository to GitHub (**do not** commit `.env` or real secrets).
-2. Go to [share.streamlit.io](https://share.streamlit.io) → **New app**.
-3. Select your repo, branch, and set **Main file path** to:
-   ```
-   app.py
-   ```
-4. Under **Advanced settings → Secrets**, paste values from `.streamlit/secrets.toml.example`, for example:
+1. Click **▶ Run Review Analysis** — collects configured online sources (uses cache when fresh)
+2. Or click **🔄 Refresh Live Reviews** — force newest download + Gemini analysis
+3. Open **Customer Insights** and **AI Product Manager Chatbot**
 
-   ```toml
-   GEMINI_API_KEY = "your_real_key"
-   GEMINI_MODEL = "gemini-2.0-flash"
-   REDDIT_CLIENT_ID = "optional"
-   REDDIT_CLIENT_SECRET = "optional"
-   REDDIT_USER_AGENT = "zepto_ai_engine/1.0 by ZeptoPMResearch"
-   PLAYSTORE_APP_ID = "com.zeptoconsumerapp"
-   PLAYSTORE_REVIEW_COUNT = "500"
-   ```
+Chatbot tips:
 
-5. Click **Deploy**.
-
-After deploy:
-
-- Use the sidebar button to fetch Google Play reviews (saved under `data/reviews.csv` on the cloud instance).
-- Dashboards and the chatbot refresh from `database/feedback.db` automatically.
-- Note: Streamlit Cloud storage is **ephemeral** — re-fetch reviews after cold starts / redeploys if the DB was reset.
+- “Show me latest reviews”
+- “What are users saying today?”
+- If data is stale: you’ll be asked to click **Refresh Live Reviews**
 
 ---
 
-## How the pipeline works
+## Streamlit Community Cloud
+
+1. Push this repo to GitHub (**do not** commit `.env`)
+2. [share.streamlit.io](https://share.streamlit.io) → **New app**
+3. Main file path: `app.py`
+4. Secrets → paste from `.streamlit/secrets.toml.example`
+5. Deploy → click **🔄 Refresh Live Reviews**
+
+Note: Cloud storage is ephemeral — re-refresh after cold starts / redeploys.
+
+---
+
+## Pipeline
 
 ```
-Fetch Google Play reviews (or Reddit)
+Run Review Analysis / Refresh Live Reviews
    ↓
-Clean + dedupe → data/reviews.csv + feedback.db
+Google Play (+ App Store if enabled + Reddit if configured)
    ↓
-Gemini (or rule-based fallback) analysis
+Merge + dedupe → data/ + feedback.db
    ↓
-Dashboards + PM chatbot use latest analyzed reviews
+Gemini analysis
+   ↓
+Dashboards + chatbot use fetched evidence only
 ```
-
----
-
-## Product management framing
-
-Continuously listen → structure qualitative noise → ask strategy questions → leave with insight + evidence + an opportunity to ship.
