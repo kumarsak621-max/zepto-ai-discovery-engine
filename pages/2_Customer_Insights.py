@@ -15,7 +15,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.database import init_db
-from src.gemini_status_ui import render_gemini_key_caption
+from src.gemini_status_ui import (
+    render_gemini_all_keys_failed_warning,
+    render_gemini_key_caption,
+)
 from src.insights_ui import render_root_cause_analysis
 from src.paths import ensure_runtime_dirs
 from src.streamlit_cache import cached_discovery_dashboard, clear_data_caches
@@ -138,6 +141,17 @@ if not isinstance(reviews, list) or not reviews:
         "**🔄 Refresh Live Reviews** in the sidebar to collect and analyze reviews."
     )
     st.stop()
+
+_discovery_source = str((dash.get("discovery") or {}).get("source") or "")
+if _discovery_source.startswith("fallback-all-keys") or _discovery_source.startswith(
+    "fallback-auth"
+):
+    render_gemini_all_keys_failed_warning()
+elif _discovery_source.startswith("fallback"):
+    st.info(
+        "Showing evidence-based insights while Gemini is unavailable. "
+        "Dashboards remain fully usable."
+    )
 
 try:
     df = pd.DataFrame(reviews)

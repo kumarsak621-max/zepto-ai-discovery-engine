@@ -782,20 +782,46 @@ def _discovery_payload_is_valid(discovery: dict[str, Any] | None) -> bool:
     return True
 
 
+def clear_discovery_disk_cache() -> None:
+    try:
+        if DISCOVERY_CACHE_PATH.exists():
+            DISCOVERY_CACHE_PATH.unlink()
+    except OSError as exc:
+        logger.warning("Could not clear discovery cache: %s", exc)
+
+
+def _is_durable_discovery_cache(discovery: dict[str, Any]) -> bool:
+    """Only durable Gemini successes should be reused from disk."""
+    source = str((discovery or {}).get("source") or "").lower()
+    if source.startswith("fallback"):
+        return False
+    return source in {"gemini", "gemini-cached", "cache", "ok"}
+
+
 def _load_discovery_disk_cache(cache_key: str) -> dict[str, Any] | None:
     if not DISCOVERY_CACHE_PATH.exists():
         return None
     try:
         payload = json.loads(DISCOVERY_CACHE_PATH.read_text(encoding="utf-8"))
         discovery = payload.get("discovery")
-        if payload.get("cache_key") == cache_key and _discovery_payload_is_valid(discovery):
+        if (
+            payload.get("cache_key") == cache_key
+            and _discovery_payload_is_valid(discovery)
+            and _is_durable_discovery_cache(discovery)
+        ):
             return discovery
+        # Drop poisoned / fallback caches so Gemini can retry after key fixes
+        if isinstance(discovery, dict) and not _is_durable_discovery_cache(discovery):
+            clear_discovery_disk_cache()
     except Exception:
         return None
     return None
 
 
 def _save_discovery_disk_cache(cache_key: str, discovery: dict[str, Any]) -> None:
+    """Persist only successful Gemini payloads — never cache auth/timeout fallbacks."""
+    if not _discovery_payload_is_valid(discovery) or not _is_durable_discovery_cache(discovery):
+        return
     try:
         ensure_runtime_dirs()
         DISCOVERY_CACHE_PATH.write_text(
@@ -808,14 +834,6 @@ def _save_discovery_disk_cache(cache_key: str, discovery: dict[str, Any]) -> Non
         )
     except Exception as exc:
         logger.warning("Could not persist discovery cache: %s", exc)
-
-
-def clear_discovery_disk_cache() -> None:
-    try:
-        if DISCOVERY_CACHE_PATH.exists():
-            DISCOVERY_CACHE_PATH.unlink()
-    except OSError as exc:
-        logger.warning("Could not clear discovery cache: %s", exc)
 
 
 def _call_gemini_discovery_json(prompt: str) -> dict[str, Any]:
@@ -854,7 +872,6 @@ def generate_gemini_discovery(
         return cached
 
     if not has_gemini():
-        _save_discovery_disk_cache(cache_key, fallback)
         return fallback
 
     sample_lines = []
@@ -917,8 +934,8 @@ def generate_gemini_discovery(
                 rca["pm_insights"] = fb_rca["pm_insights"]
             normalized["root_cause_analysis"] = rca
         if not _discovery_payload_is_valid(normalized):
-            _save_discovery_disk_cache(cache_key, fallback)
             return fallback
+        normalized["source"] = "gemini"
         _save_discovery_disk_cache(cache_key, normalized)
         return normalized
     except Exception as exc:
@@ -926,6 +943,11 @@ def generate_gemini_discovery(
         if "timed out" in msg or "timeout" in msg:
             logger.warning("Gemini discovery timed out — using evidence fallback")
             fallback = {**fallback, "source": "fallback-timeout"}
+        elif "all gemini api keys failed" in msg:
+            logger.warning(
+                "All Gemini keys failed for discovery — using evidence fallback"
+            )
+            fallback = {**fallback, "source": "fallback-all-keys"}
         elif _is_auth_error(exc):
             logger.warning(
                 "Gemini auth/config error — using evidence fallback. "
@@ -935,7 +957,7 @@ def generate_gemini_discovery(
         else:
             logger.warning("Gemini discovery dashboard failed: %s", exc)
             fallback = {**fallback, "source": "fallback-error"}
-        _save_discovery_disk_cache(cache_key, fallback)
+        # Do not disk-cache error fallbacks — allows retry after key/quota recovery
         return fallback
 
 

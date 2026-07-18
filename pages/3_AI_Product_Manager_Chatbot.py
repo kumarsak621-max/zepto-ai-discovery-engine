@@ -114,12 +114,21 @@ if prompt:
                 }
             )
         except Exception as exc:
-            friendly = (
-                "The chatbot could not answer right now. "
-                "Check that reviews are loaded and GEMINI_API_KEY is set in Streamlit Secrets. "
-                f"Details: {exc}"
-            )
+            msg = str(exc)
+            if "All Gemini API keys failed" in msg or "quota" in msg.lower():
+                friendly = (
+                    "Gemini is temporarily unavailable after trying every configured API key. "
+                    "Please retry shortly, or refresh live reviews and ask again. "
+                    "Your conversation and dashboards stay available."
+                )
+            else:
+                friendly = (
+                    "The chatbot could not answer right now. "
+                    "Check that reviews are loaded and GEMINI_API_KEY "
+                    "(or GEMINI_API_KEY_1…_10) is set in Streamlit Secrets / `.env`."
+                )
             st.error(friendly)
+            st.caption(f"Technical detail: {msg[:240]}")
             st.session_state.pm_messages.append(
                 {"role": "assistant", "content": friendly, "evidence": []}
             )

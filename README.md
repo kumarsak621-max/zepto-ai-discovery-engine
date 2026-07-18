@@ -32,6 +32,7 @@ zepto/
 ├── requirements.txt
 ├── README.md
 ├── .env.example
+├── .streamlit/secrets.toml.example
 ├── data/                  # Review cache + merged datasets (auto-created)
 ├── output/                # Runtime outputs (auto-created)
 ├── cache/                 # Cache dir (auto-created)
@@ -42,16 +43,14 @@ zepto/
 │   └── 3_AI_Product_Manager_Chatbot.py
 └── src/
     ├── config.py
-    ├── paths.py
-    ├── playstore_scraper.py
-    ├── appstore_scraper.py
-    ├── manual_reviews.py
-    ├── data_pipeline.py
+    ├── gemini_key_manager.py   # Multi-key failover + stats
+    ├── gemini_status_ui.py     # Gemini API Status admin panel
     ├── gemini_analysis.py
-    ├── rag_pipeline.py
+    ├── discovery_insights.py
+    ├── insights_ui.py
+    ├── data_pipeline.py
     ├── chatbot.py
     ├── database.py
-    ├── streamlit_sources.py
     └── ...
 ```
 
@@ -104,7 +103,14 @@ When a Gemini request fails due to rate limits, quota exhaustion, timeouts, or t
 
 If every key fails, analysis/chatbot use evidence-based fallbacks and show a clear error — the app does not crash.
 
-Home page → **Gemini API Status** shows total keys, active key index (e.g. `Using Gemini Key 2 of 4`), successes, failures, failovers, and last error.
+Home page → **Gemini API Status** shows:
+
+- Total Keys Loaded  
+- Active Key (e.g. `Key 2 of 4`)  
+- Successful / Failed Requests  
+- Failovers  
+- Current Gemini Model  
+- Last error (keys never displayed)
 
 ### Streamlit Cloud Secrets
 

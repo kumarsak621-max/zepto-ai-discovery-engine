@@ -21,6 +21,7 @@ DEFAULT_MAX_ATTEMPTS = 6
 DEFAULT_TIMEOUT_SEC = 45
 DEFAULT_BACKOFF_BASE_SEC = 1.0
 DEFAULT_BACKOFF_MAX_SEC = 16.0
+DEFAULT_CIRCUIT_COOLDOWN_SEC = 120.0
 
 _RETRYABLE_TOKENS = (
     "429",
@@ -49,29 +50,53 @@ _AUTH_TOKENS = (
     "401",
     "403",
     "api key",
+    "api key not valid",
+    "api_key_invalid",
+    "invalid api key",
     "invalid authentication",
     "access_token_type_unsupported",
     "permission_denied",
     "unauthenticated",
-    "api_key_invalid",
+    "consumer_invalid",
+    "permission denied",
 )
 
 
-def _secret_or_env(name: str) -> str:
+_SECRETS_AVAILABLE: bool | None = None
+
+
+def _try_streamlit_secret(name: str) -> str | None:
+    """Return secret value if Streamlit Secrets are available (Cloud or local file)."""
+    global _SECRETS_AVAILABLE
+    if _SECRETS_AVAILABLE is False:
+        return None
     try:
         import streamlit as st
 
         secrets = getattr(st, "secrets", None)
-        if secrets is not None:
-            try:
-                if name in secrets:
-                    value = secrets.get(name)
-                    if value is not None and str(value).strip():
-                        return str(value).strip()
-            except Exception:
-                pass
+        if secrets is None:
+            _SECRETS_AVAILABLE = False
+            return None
+        try:
+            value = secrets.get(name)
+        except Exception:
+            # Local runs without secrets.toml raise once; remember and skip later.
+            _SECRETS_AVAILABLE = False
+            return None
+        _SECRETS_AVAILABLE = True
+        if value is not None and str(value).strip():
+            return str(value).strip()
+        return None
     except Exception:
-        pass
+        _SECRETS_AVAILABLE = False
+        return None
+
+
+def _secret_or_env(name: str) -> str:
+    """Prefer Streamlit Secrets (Community Cloud), then OS env / .env."""
+    secret = _try_streamlit_secret(name)
+    if secret:
+        return secret
     return (os.getenv(name, "") or "").strip()
 
 
@@ -95,6 +120,41 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+_PLACEHOLDER_PREFIXES = (
+    "your_api",
+    "your_key",
+    "your_primary",
+    "changeme",
+    "replace_me",
+    "xxx",
+    "todo",
+)
+
+
+def _is_placeholder_key(key: str) -> bool:
+    lower = key.lower().strip()
+    if not lower:
+        return True
+    if any(lower.startswith(p) for p in _PLACEHOLDER_PREFIXES):
+        return True
+    if lower in {"none", "null", "n/a", "na", "test", "dummy"}:
+        return True
+    return False
+
+
+def _sanitize_error(err: str, *, limit: int = 300) -> str:
+    """Strip anything that looks like an API key from error text."""
+    import re
+
+    text = (err or "").strip()
+    # Long token-like strings (API keys)
+    text = re.sub(r"(?i)(api[_-]?key\s*[=:]\s*)\S+", r"\1[REDACTED]", text)
+    text = re.sub(r"\bAIza[0-9A-Za-z_-]{20,}\b", "[REDACTED_KEY]", text)
+    text = re.sub(r"\bAQ\.[A-Za-z0-9_-]{20,}\b", "[REDACTED_KEY]", text)
+    text = re.sub(r"(?i)bearer\s+\S+", "Bearer [REDACTED]", text)
+    return text[:limit]
+
+
 def load_gemini_api_keys() -> list[str]:
     """
     Load up to 10 Gemini API keys.
@@ -110,9 +170,7 @@ def load_gemini_api_keys() -> list[str]:
 
     def _add(value: str) -> None:
         key = (value or "").strip()
-        if not key or key in seen:
-            return
-        if key.lower().startswith("your_api"):
+        if not key or key in seen or _is_placeholder_key(key):
             return
         seen.add(key)
         ordered.append(key)
@@ -121,6 +179,12 @@ def load_gemini_api_keys() -> list[str]:
     for i in range(1, MAX_KEYS + 1):
         _add(_secret_or_env(f"GEMINI_API_KEY_{i}"))
 
+    if len(ordered) > MAX_KEYS:
+        logger.warning(
+            "More than %s unique Gemini keys configured; using the first %s.",
+            MAX_KEYS,
+            MAX_KEYS,
+        )
     return ordered[:MAX_KEYS]
 
 
@@ -142,6 +206,7 @@ class KeyManagerStats:
     last_error: str = ""
     last_success_at: str = ""
     last_failover_at: str = ""
+    model_name: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -158,6 +223,7 @@ class KeyManagerStats:
             "last_error": self.last_error or "-",
             "last_success_at": self.last_success_at or "-",
             "last_failover_at": self.last_failover_at or "-",
+            "model_name": self.model_name or "-",
         }
 
 
@@ -171,8 +237,10 @@ class GeminiKeyManager:
     timeout_sec: float = DEFAULT_TIMEOUT_SEC
     backoff_base_sec: float = DEFAULT_BACKOFF_BASE_SEC
     backoff_max_sec: float = DEFAULT_BACKOFF_MAX_SEC
+    circuit_cooldown_sec: float = DEFAULT_CIRCUIT_COOLDOWN_SEC
     stats: KeyManagerStats = field(default_factory=KeyManagerStats)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    _circuit_open_until: float = field(default=0.0, repr=False)
 
     @classmethod
     def from_env(cls) -> "GeminiKeyManager":
@@ -188,6 +256,9 @@ class GeminiKeyManager:
             backoff_max_sec=_env_float(
                 "GEMINI_BACKOFF_MAX_SEC", DEFAULT_BACKOFF_MAX_SEC
             ),
+            circuit_cooldown_sec=_env_float(
+                "GEMINI_CIRCUIT_COOLDOWN_SEC", DEFAULT_CIRCUIT_COOLDOWN_SEC
+            ),
         )
         mgr.stats.total_keys = len(keys)
         mgr.stats.active_index = 0
@@ -195,11 +266,32 @@ class GeminiKeyManager:
 
     def reload(self) -> None:
         with self._lock:
+            prev_count = len(self.keys)
             self.keys = load_gemini_api_keys()
             if self.active_index >= len(self.keys):
                 self.active_index = 0
+            self.max_attempts = _env_int("GEMINI_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS)
+            self.timeout_sec = _env_float("GEMINI_TIMEOUT_SEC", DEFAULT_TIMEOUT_SEC)
+            self.backoff_base_sec = _env_float(
+                "GEMINI_BACKOFF_BASE_SEC", DEFAULT_BACKOFF_BASE_SEC
+            )
+            self.backoff_max_sec = _env_float(
+                "GEMINI_BACKOFF_MAX_SEC", DEFAULT_BACKOFF_MAX_SEC
+            )
+            self.circuit_cooldown_sec = _env_float(
+                "GEMINI_CIRCUIT_COOLDOWN_SEC", DEFAULT_CIRCUIT_COOLDOWN_SEC
+            )
             self.stats.total_keys = len(self.keys)
             self.stats.active_index = self.active_index
+            # New keys added → allow Gemini again immediately
+            if len(self.keys) != prev_count:
+                self._circuit_open_until = 0.0
+            try:
+                from src.config import get_gemini_model
+
+                self.stats.model_name = get_gemini_model()
+            except Exception:
+                pass
 
     def has_keys(self) -> bool:
         with self._lock:
@@ -226,6 +318,13 @@ class GeminiKeyManager:
         with self._lock:
             self.stats.total_keys = len(self.keys)
             self.stats.active_index = self.active_index
+            if not self.stats.model_name:
+                try:
+                    from src.config import get_gemini_model
+
+                    self.stats.model_name = get_gemini_model()
+                except Exception:
+                    self.stats.model_name = "gemini-2.0-flash"
             return self.stats.to_dict()
 
     def _switch_to_next(self, reason: str) -> bool:
@@ -238,13 +337,19 @@ class GeminiKeyManager:
             self.stats.failovers += 1
             self.stats.active_index = self.active_index
             self.stats.last_failover_at = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-            self.stats.last_error = reason[:300]
+            safe_reason = _sanitize_error(reason)
+            self.stats.last_error = safe_reason
             logger.warning(
-                "Gemini failover: Key %s → Key %s of %s (%s)",
+                "Gemini failover: Key %s → Key %s of %s | total_keys=%s "
+                "success=%s failed=%s failovers=%s | %s",
                 prev + 1,
                 self.active_index + 1,
                 len(self.keys),
-                reason[:160],
+                len(self.keys),
+                self.stats.successful_requests,
+                self.stats.failed_requests,
+                self.stats.failovers,
+                safe_reason[:160],
             )
             return True
 
@@ -278,7 +383,18 @@ class GeminiKeyManager:
                 "GEMINI_API_KEY_1…GEMINI_API_KEY_10 in .env / Streamlit Secrets."
             )
 
+        with self._lock:
+            if self._circuit_open_until and time.time() < self._circuit_open_until:
+                remaining = int(self._circuit_open_until - time.time())
+                raise RuntimeError(
+                    "All Gemini API keys failed recently. "
+                    f"Using fallbacks for ~{max(remaining, 1)}s to keep the app responsive. "
+                    f"Last error: {self.stats.last_error or 'unavailable'}"
+                )
+
         model_name = (model_name or get_gemini_model()).strip() or "gemini-2.0-flash"
+        with self._lock:
+            self.stats.model_name = model_name
         last_error: Exception | None = None
         attempts = max(1, min(self.max_attempts, max(len(self.keys) * 2, 2)))
 
@@ -286,7 +402,17 @@ class GeminiKeyManager:
             with self._lock:
                 idx = self.active_index
                 key = self.keys[idx]
-                label = f"Key {idx + 1} of {len(self.keys)}"
+                n_keys = len(self.keys)
+                label = f"Key {idx + 1} of {n_keys}"
+
+            logger.info(
+                "Gemini attempt %s/%s using %s (model=%s, total_keys=%s)",
+                attempt + 1,
+                attempts,
+                label,
+                model_name,
+                n_keys,
+            )
 
             if on_key_used:
                 try:
@@ -302,17 +428,24 @@ class GeminiKeyManager:
                         "%Y-%m-%d %H:%M:%S UTC", time.gmtime()
                     )
                     self.stats.active_index = idx
-                logger.info("Gemini success with %s", label)
+                    self.stats.model_name = model_name
+                    self._circuit_open_until = 0.0
+                logger.info(
+                    "Gemini success with %s | success=%s failed=%s failovers=%s",
+                    label,
+                    self.stats.successful_requests,
+                    self.stats.failed_requests,
+                    self.stats.failovers,
+                )
                 return text
             except Exception as exc:
                 last_error = exc
-                err = str(exc)
+                err = _sanitize_error(str(exc))
                 with self._lock:
                     self.stats.failed_requests += 1
-                    self.stats.last_error = err[:300]
+                    self.stats.last_error = err
 
                 if not is_retryable_error(exc):
-                    # Still try next key for unknown errors once
                     logger.warning("Gemini non-standard error on %s: %s", label, err[:200])
 
                 switched = self._switch_to_next(err)
@@ -330,9 +463,18 @@ class GeminiKeyManager:
                     )
                     time.sleep(backoff)
 
+        safe_last = _sanitize_error(str(last_error))
+        with self._lock:
+            cooldown = max(15.0, float(self.circuit_cooldown_sec or DEFAULT_CIRCUIT_COOLDOWN_SEC))
+            self._circuit_open_until = time.time() + cooldown
+            self.stats.last_error = safe_last
+        logger.error(
+            "All Gemini keys failed — opening circuit for %.0fs (fallbacks active)",
+            cooldown,
+        )
         raise RuntimeError(
             "All Gemini API keys failed after retries. "
-            f"Last error: {last_error}. "
+            f"Last error: {safe_last}. "
             "Check quotas / key validity in Google AI Studio."
         )
 

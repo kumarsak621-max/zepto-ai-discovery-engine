@@ -15,22 +15,27 @@ load_dotenv(ROOT_DIR / ".env")
 load_dotenv()
 
 
+_SECRETS_AVAILABLE: bool | None = None
+
+
 def _secret_or_env(name: str, default: str = "") -> str:
     """Prefer Streamlit secrets (Community Cloud), then OS env, then default."""
-    try:
-        import streamlit as st
+    global _SECRETS_AVAILABLE
+    if _SECRETS_AVAILABLE is not False:
+        try:
+            import streamlit as st
 
-        secrets = getattr(st, "secrets", None)
-        if secrets is not None:
-            try:
-                if name in secrets:
+            secrets = getattr(st, "secrets", None)
+            if secrets is not None:
+                try:
                     value = secrets.get(name)
+                    _SECRETS_AVAILABLE = True
                     if value is not None and str(value).strip() != "":
                         return str(value).strip()
-            except Exception:
-                pass
-    except Exception:
-        pass
+                except Exception:
+                    _SECRETS_AVAILABLE = False
+        except Exception:
+            _SECRETS_AVAILABLE = False
     value = os.getenv(name, default)
     return (value or default).strip()
 
@@ -99,15 +104,8 @@ def get_gemini_api_key() -> str:
 
 def get_gemini_model() -> str:
     """Gemini model name from Streamlit Secrets, then env / .env."""
-    try:
-        import streamlit as st
-
-        model = st.secrets.get("GEMINI_MODEL", "")
-        if model is not None and str(model).strip():
-            return str(model).strip()
-    except Exception:
-        pass
-    return (os.getenv("GEMINI_MODEL", "") or "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+    model = _secret_or_env("GEMINI_MODEL", "")
+    return (model or "gemini-2.0-flash").strip() or "gemini-2.0-flash"
 
 
 # Public config values used across the app (never hardcode secrets)
@@ -189,8 +187,12 @@ def has_gemini() -> bool:
     """True when at least one Gemini API key is available (Secrets or .env)."""
     global GEMINI_API_KEY, GEMINI_MODEL, GEMINI_API_KEYS
     GEMINI_API_KEYS = get_gemini_api_keys()
-    GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
     GEMINI_MODEL = get_gemini_model()
+    # Prefer the currently active failover key when the manager is available
+    try:
+        GEMINI_API_KEY = get_gemini_api_key()
+    except Exception:
+        GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
     return bool(GEMINI_API_KEYS)
 
 

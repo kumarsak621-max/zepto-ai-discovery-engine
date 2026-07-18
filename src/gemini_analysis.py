@@ -59,23 +59,6 @@ STRUCTURED_KEYS = (
 )
 
 
-def _get_model():
-    """
-    Backward-compatible model factory using the active key from the key manager.
-    Prefer generate_gemini_text() for failover-aware calls.
-    """
-    if not has_gemini():
-        raise RuntimeError(
-            "No Gemini API key configured. "
-            "Set GEMINI_API_KEY or GEMINI_API_KEY_1…_10 in .env / Streamlit Secrets."
-        )
-    from src.config import GEMINI_MODEL, get_gemini_api_key
-    import google.generativeai as genai
-
-    genai.configure(api_key=get_gemini_api_key())
-    return genai.GenerativeModel(GEMINI_MODEL)
-
-
 def generate_gemini_text(prompt: str) -> str:
     """Generate text via multi-key Gemini manager (automatic failover)."""
     from src.gemini_key_manager import generate_with_failover
@@ -419,11 +402,19 @@ Do not invent fake quotes that contradict the evidence.
         )
         roots = [_s(e.get("root_cause")) for e in evidence if _s(e.get("root_cause"))]
         root = roots[0] if roots else f"Emerging themes: {themes}."
+        err = str(exc)
+        if "All Gemini API keys failed" in err:
+            note = (
+                "Live Gemini synthesis unavailable after trying every configured API key. "
+                "Showing retrieval-based brief."
+            )
+        else:
+            note = "Live Gemini synthesis unavailable. Showing retrieval-based brief."
         return (
             f"### Customer Insight\n"
             f"Based on {len(evidence)} retrieved feedback items related to your question.\n\n"
             f"### Evidence\n{quotes}\n\n"
             f"### Root Cause\n{root}\n\n"
             f"### Product Opportunity\n{opportunity}\n\n"
-            f"_Note: Live Gemini synthesis unavailable ({exc}). Showing retrieval-based brief._"
+            f"_Note: {note}_"
         )
