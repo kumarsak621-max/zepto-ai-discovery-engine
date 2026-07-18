@@ -447,7 +447,10 @@ def get_pm_insights(db_path: Path | None = None, limit: int = 2000) -> dict[str,
             root_cause_counter[root[:100]] += 1
         if category and category.lower() not in {"app_review", "general", ""}:
             category_counter[category] += 1
-        if theme == "Habitual buying" or segment == "Habitual grocery buyer":
+        if theme == "Habitual buying" or segment in {
+            "Habitual grocery buyer",
+            "Frequent buyers",
+        }:
             habit_key = segment or theme or "Habitual shopping"
             habit_counter[habit_key] += 1
         if opportunity:
@@ -474,6 +477,11 @@ def get_pm_insights(db_path: Path | None = None, limit: int = 2000) -> dict[str,
             "Habitual grocery buyer",
             "Comparison shopper",
             "Convenience seeker",
+            "Frequent buyers",
+            "Impulse shoppers",
+            "Occasional buyers",
+            "Convenience-first users",
+            "Health-conscious users",
         } or theme in EXPLORATION_BARRIER_THEMES:
             if segment:
                 exploration_segments[segment] += 1

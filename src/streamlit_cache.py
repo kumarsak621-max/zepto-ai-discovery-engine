@@ -35,13 +35,27 @@ def cached_reviews(limit: int = 2000) -> list[dict[str, Any]]:
     return fetch_all_reviews(limit=limit)
 
 
+@st.cache_data(ttl=900, show_spinner=True)
+def cached_discovery_dashboard(limit: int = 2000) -> dict[str, Any]:
+    from src.discovery_insights import build_discovery_dashboard
+
+    return build_discovery_dashboard(limit=limit)
+
+
 def clear_data_caches() -> None:
     """Invalidate dashboard caches after fetch / analysis."""
+    try:
+        from src.discovery_insights import clear_discovery_disk_cache
+
+        clear_discovery_disk_cache()
+    except Exception:
+        pass
     try:
         cached_collection_stats.clear()
         cached_vector_stats.clear()
         cached_pm_insights.clear()
         cached_reviews.clear()
+        cached_discovery_dashboard.clear()
     except Exception:
         try:
             st.cache_data.clear()

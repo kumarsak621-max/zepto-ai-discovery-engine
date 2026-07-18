@@ -148,6 +148,14 @@ INTENT_TAXONOMY = ["Complaint", "Suggestion", "Question", "Appreciation"]
 SENTIMENT_VALUES = ["Positive", "Negative", "Neutral"]
 
 CUSTOMER_SEGMENTS = [
+    "Price-sensitive shoppers",
+    "Convenience-first users",
+    "Health-conscious users",
+    "Premium shoppers",
+    "Frequent buyers",
+    "Impulse shoppers",
+    "Occasional buyers",
+    # Legacy labels kept for already-analyzed reviews
     "Habitual grocery buyer",
     "Price-sensitive shopper",
     "Quality / trust conscious",

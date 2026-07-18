@@ -20,6 +20,7 @@ Lightweight and **Streamlit Community Cloud** friendly — no ChromaDB, no embed
 | **Insights dashboards** | Totals, ratings, sentiment, habits, segments, AI summary |
 | **PM chatbot** | Answers from fetched reviews; supports “latest / live reviews” |
 | **Refresh Live Reviews** | Force newest download + re-analysis |
+| **Part 1 PM dashboard** | Sentiment, habits, segments, barriers, opportunities, growth KPIs/recs, root cause, validation |
 
 ---
 

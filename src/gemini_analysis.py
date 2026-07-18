@@ -24,15 +24,20 @@ Analyze this customer feedback and return ONLY valid JSON with exactly these key
 
 {{
   "review_summary": "1-2 sentence PM-ready summary of what the customer is saying",
-  "sentiment": "one of: {sentiments}",
+  "sentiment": "MUST be exactly one of: Positive, Neutral, Negative",
   "theme": "one of: {themes}",
   "user_intent": "one of: {intents}",
-  "customer_segment": "one of: {segments}",
+  "customer_segment": "prefer one of: {segments}",
   "pain_point": "specific pain the customer feels (empty string if appreciation)",
   "root_cause": "likely underlying cause of the pain/behavior",
   "product_opportunity": "concrete product opportunity or experiment for Zepto",
-  "category": "product/category mentioned (e.g. personal care, grocery, delivery) or general"
+  "category": "product/category mentioned (e.g. personal care, grocery, snacks, beverages) or general"
 }}
+
+Sentiment rules:
+- Positive: praise, delight, loyalty, recommendations
+- Negative: complaints, frustration, churn risk, quality/delivery failures
+- Neutral: mixed, factual, mild, or unclear emotion
 
 Focus on category exploration barriers when relevant (personal care, beauty, electronics,
 non-grocery discovery, trust, recommendations, awareness).
@@ -81,28 +86,28 @@ def _extract_json(raw: str) -> dict[str, Any]:
 
 def _infer_segment(lower: str, theme: str, sentiment: str) -> str:
     rules = [
-        ("Price-sensitive shopper", ("price", "expensive", "costly", "discount", "mrp", "cheap")),
-        ("Quality / trust conscious", ("trust", "fake", "expired", "quality", "hygiene", "dirty", "fungus")),
-        ("New category explorer", ("personal care", "beauty", "shampoo", "skincare", "electronics", "try")),
-        ("Comparison shopper", ("blinkit", "instamart", "swiggy", "vs", "compared", "other app")),
-        ("Convenience seeker", ("fast", "minutes", "late", "delivery", "eta", "quick")),
-        ("Support-frustrated user", ("support", "refund", "customer care", "helpline")),
-        ("Habitual grocery buyer", ("always", "regular", "everyday", "daily", "habit")),
+        ("Price-sensitive shoppers", ("price", "expensive", "costly", "discount", "mrp", "cheap")),
+        ("Health-conscious users", ("organic", "healthy", "fresh", "hygiene", "quality", "expired")),
+        ("Premium shoppers", ("premium", "branded", "best quality", "worth")),
+        ("Convenience-first users", ("fast", "minutes", "late", "delivery", "eta", "quick", "convenient")),
+        ("Frequent buyers", ("always", "regular", "everyday", "daily", "habit", "reorder")),
+        ("Impulse shoppers", ("suddenly", "impulse", "craving", "tonight", "urgent")),
+        ("Occasional buyers", ("sometimes", "occasionally", "first time", "rarely")),
     ]
     for segment, keywords in rules:
         if any(k in lower for k in keywords):
             return segment
     if theme == "Habitual buying":
-        return "Habitual grocery buyer"
+        return "Frequent buyers"
     if theme == "Pricing concern":
-        return "Price-sensitive shopper"
+        return "Price-sensitive shoppers"
     if theme in {"Trust issue", "Product quality"}:
-        return "Quality / trust conscious"
+        return "Health-conscious users"
     if theme in {"Product discovery issue", "Category awareness"}:
-        return "New category explorer"
+        return "Impulse shoppers"
     if sentiment == "Positive":
-        return "Convenience seeker"
-    return "General shopper"
+        return "Convenience-first users"
+    return "Occasional buyers"
 
 
 def _opportunity_for(theme: str, segment: str) -> str:
@@ -118,7 +123,7 @@ def _opportunity_for(theme: str, segment: str) -> str:
         "Customer support": "In-app instant resolution for missing/damaged items",
     }
     base = mapping.get(theme, "Run a discovery interview sprint on this theme and ship a targeted experiment")
-    if segment == "New category explorer":
+    if segment in {"New category explorer", "Impulse shoppers", "Occasional buyers"}:
         return "AI-assisted category exploration with personalized recommendations and try-before-you-buy kits"
     return base
 
@@ -291,7 +296,12 @@ def analyze_batch(reviews: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return results
 
 
-def generate_pm_answer(question: str, evidence: list[dict[str, Any]]) -> str:
+def generate_pm_answer(
+    question: str,
+    evidence: list[dict[str, Any]],
+    *,
+    dashboard_context: str = "",
+) -> str:
     """Generate a structured Product Manager research answer from retrieved reviews."""
 
     def _s(value: Any) -> str:
@@ -312,10 +322,17 @@ def generate_pm_answer(question: str, evidence: list[dict[str, Any]]) -> str:
             f"- [{_s(e.get('source')) or '?'}|{_s(e.get('sentiment')) or '?'}|{_s(e.get('theme')) or '?'}"
             f"|{_s(e.get('customer_segment')) or '?'}] "
             f"pain={_s(e.get('pain_point')) or 'n/a'} | "
+            f"root={_s(e.get('root_cause')) or 'n/a'} | "
             f"{(_s(e.get('review_summary')) or _s(e.get('text')))[:220]}"
             for e in evidence[:8]
         ]
     ) or "- No matching reviews found."
+
+    context_block = (
+        f"\n\nPre-computed AI Discovery dashboard insights:\n{dashboard_context}\n"
+        if dashboard_context
+        else ""
+    )
 
     if not has_gemini():
         quotes = "\n".join(
@@ -335,13 +352,15 @@ def generate_pm_answer(question: str, evidence: list[dict[str, Any]]) -> str:
         )
         roots = [_s(e.get("root_cause")) for e in evidence if _s(e.get("root_cause"))]
         root = roots[0] if roots else f"Emerging themes: {themes}."
+        extra = f"\n\n### Dashboard Context\n{dashboard_context}\n" if dashboard_context else ""
         return (
             f"### Customer Insight\n"
             f"Based on {len(evidence)} retrieved feedback items related to your question.\n\n"
             f"### Evidence\n{quotes}\n\n"
             f"### Root Cause\n{root}\n\n"
-            f"### Product Opportunity\n{opportunity}\n\n"
-            f"_Note: Configure GEMINI_API_KEY for richer AI synthesis._"
+            f"### Product Opportunity\n{opportunity}\n"
+            f"{extra}"
+            f"\n_Note: Configure GEMINI_API_KEY for richer AI synthesis._"
         )
 
     prompt = f"""You are an AI Product Manager research assistant for Zepto (quick commerce).
@@ -351,7 +370,7 @@ A Zepto PM asked:
 
 Here are the most relevant recent customer feedback snippets (with structured analysis):
 {evidence_block}
-
+{context_block}
 Write a crisp research brief with EXACTLY these sections (use markdown headings):
 
 ### Customer Insight
@@ -366,7 +385,8 @@ The underlying reason behind the behavior/problem.
 ### Product Opportunity
 A concrete product opportunity / experiment Zepto could run.
 
-Be specific to Zepto quick commerce. Do not invent fake quotes that contradict the evidence.
+Be specific to Zepto quick commerce. Align with dashboard insights when provided.
+Do not invent fake quotes that contradict the evidence.
 """
     try:
         model = _get_model()

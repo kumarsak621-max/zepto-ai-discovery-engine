@@ -19,10 +19,22 @@ SYSTEM_INTRO = (
 
 EXAMPLE_QUESTIONS = [
     "Show me latest reviews",
-    "What are users saying today?",
-    "Why are Zepto users not trying personal care products?",
-    "What are the top delivery experience complaints this month?",
+    "Why do users keep buying the same categories?",
+    "What are the top category discovery barriers?",
+    "Which growth opportunities should we prioritize?",
     "What pricing concerns appear most often?",
+]
+
+_INSIGHT_PATTERNS = [
+    r"\broot cause",
+    r"\bwhy (do|are) users?\b",
+    r"\bsame categor",
+    r"\bdiscovery barrier",
+    r"\bgrowth (kpi|opportunit|recommend)",
+    r"\buser segment",
+    r"\bshopping habit",
+    r"\bcategory exploration",
+    r"\bcross[- ]?sell",
 ]
 
 _LIVE_REVIEW_PATTERNS = [
@@ -40,6 +52,70 @@ _LIVE_REVIEW_PATTERNS = [
 def _is_live_review_question(question: str) -> bool:
     q = (question or "").lower()
     return any(re.search(pat, q) for pat in _LIVE_REVIEW_PATTERNS)
+
+
+def _is_insight_question(question: str) -> bool:
+    q = (question or "").lower()
+    return any(re.search(pat, q) for pat in _INSIGHT_PATTERNS)
+
+
+def _discovery_context_block() -> str:
+    """Compact dashboard insights for chatbot grounding (uses disk/Streamlit cache)."""
+    try:
+        from src.streamlit_cache import cached_discovery_dashboard
+
+        dash = cached_discovery_dashboard(limit=2000)
+    except Exception:
+        try:
+            from src.discovery_insights import build_discovery_dashboard
+
+            dash = build_discovery_dashboard(limit=800)
+        except Exception:
+            return ""
+
+    discovery = dash.get("discovery") or {}
+    rca = discovery.get("root_cause_analysis") or {}
+    causes = [
+        f"{c.get('root_cause')} (sev {c.get('severity_score')}/10, freq {c.get('frequency')})"
+        for c in (rca.get("causes") or [])[:5]
+    ]
+    barriers = [
+        f"{b.get('barrier')} [{b.get('severity')}]"
+        for b in (discovery.get("discovery_barriers") or [])[:5]
+    ]
+    opps = [
+        f"{o.get('current_category')} → {o.get('suggested_new_category')} "
+        f"({o.get('confidence_score')}%)"
+        for o in (discovery.get("category_exploration_opportunities") or [])[:4]
+    ]
+    recs = (discovery.get("growth_recommendations") or [])[:5]
+    habits = (discovery.get("shopping_habit_insights") or [])[:4]
+    segments = [
+        f"{s.get('segment')} ({s.get('percentage')}%)"
+        for s in (discovery.get("ai_user_segments") or [])[:5]
+    ]
+    kpis = discovery.get("growth_kpis") or {}
+    lines = [
+        "DASHBOARD INSIGHTS (use these; do not invent conflicting stats):",
+        f"- Root causes: {'; '.join(causes) or 'n/a'}",
+        f"- Barriers: {'; '.join(barriers) or 'n/a'}",
+        f"- Category opportunities: {'; '.join(opps) or 'n/a'}",
+        f"- Segments: {'; '.join(segments) or 'n/a'}",
+        f"- Habits: {'; '.join(habits) or 'n/a'}",
+        f"- Growth KPIs: {json_dumps_safe(kpis)}",
+        f"- Growth recommendations: {'; '.join(recs) or 'n/a'}",
+        f"- RCA summary: {(rca.get('summary') or '')[:600]}",
+    ]
+    return "\n".join(lines)
+
+
+def json_dumps_safe(obj: Any) -> str:
+    try:
+        import json
+
+        return json.dumps(obj, ensure_ascii=False)[:400]
+    except Exception:
+        return str(obj)[:400]
 
 
 def _summarize_latest_reviews(n: int = 10) -> dict[str, Any]:
@@ -192,7 +268,12 @@ def ask_product_manager(
             "knowledge_base": collection_stats(),
         }
 
-    answer = generate_pm_answer(question, normalized)
+    dashboard_ctx = _discovery_context_block() if _is_insight_question(question) else ""
+    answer = generate_pm_answer(
+        question,
+        normalized,
+        dashboard_context=dashboard_ctx,
+    )
     return {
         "answer": answer,
         "evidence": normalized[:5],

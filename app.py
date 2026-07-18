@@ -173,7 +173,7 @@ Use the sidebar:
 
 - **📂 Upload Manual Reviews** — CSV / Excel
 - **Data Collection Status** — pipeline health & volume
-- **Customer Insights** — complaints, themes, sentiment
+- **Customer Insights** — sentiment, habits, segments, barriers, category opportunities, growth KPIs
 - **AI Product Manager Chatbot** — ask research questions with evidence
 """
 )
