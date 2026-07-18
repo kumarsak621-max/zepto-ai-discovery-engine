@@ -67,24 +67,34 @@ DATABASE_PATH = (
 COLLECTION_NAME = "zepto_customer_feedback"
 
 
+def get_gemini_api_keys() -> list[str]:
+    """
+    All configured Gemini API keys (up to 10).
+
+    Supports legacy GEMINI_API_KEY plus GEMINI_API_KEY_1 … GEMINI_API_KEY_10
+    from Streamlit Secrets or environment / .env.
+    """
+    from src.gemini_key_manager import load_gemini_api_keys
+
+    return load_gemini_api_keys()
+
+
 def get_gemini_api_key() -> str:
     """
-    Single source for the Gemini API key.
+    Active / primary Gemini API key (backward compatible).
 
-    Order:
-      1. Streamlit Secrets — st.secrets.get("GEMINI_API_KEY", "")
-      2. Environment / .env — os.getenv("GEMINI_API_KEY", "")
+    Prefers the key manager's active key when available, else the first loaded key.
     """
     try:
-        import streamlit as st
+        from src.gemini_key_manager import get_key_manager
 
-        key = st.secrets.get("GEMINI_API_KEY", "")
-        if key is not None and str(key).strip():
-            return str(key).strip()
+        mgr = get_key_manager()
+        if mgr.has_keys():
+            return mgr.get_active_key()
     except Exception:
-        # Outside Streamlit, or secrets not configured yet
         pass
-    return (os.getenv("GEMINI_API_KEY", "") or "").strip()
+    keys = get_gemini_api_keys()
+    return keys[0] if keys else ""
 
 
 def get_gemini_model() -> str:
@@ -103,6 +113,7 @@ def get_gemini_model() -> str:
 # Public config values used across the app (never hardcode secrets)
 GEMINI_API_KEY = get_gemini_api_key()
 GEMINI_MODEL = get_gemini_model()
+GEMINI_API_KEYS = get_gemini_api_keys()
 
 TWITTER_BEARER_TOKEN = _env_str("TWITTER_BEARER_TOKEN", "")
 
@@ -175,12 +186,12 @@ EXPLORATION_BARRIER_THEMES = [
 
 
 def has_gemini() -> bool:
-    """True when a non-empty Gemini API key is available (Secrets or .env)."""
-    # Re-resolve so Streamlit Cloud Secrets work even if config imported early
-    global GEMINI_API_KEY, GEMINI_MODEL
-    GEMINI_API_KEY = get_gemini_api_key()
+    """True when at least one Gemini API key is available (Secrets or .env)."""
+    global GEMINI_API_KEY, GEMINI_MODEL, GEMINI_API_KEYS
+    GEMINI_API_KEYS = get_gemini_api_keys()
+    GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
     GEMINI_MODEL = get_gemini_model()
-    return bool(GEMINI_API_KEY.strip())
+    return bool(GEMINI_API_KEYS)
 
 
 def has_appstore() -> bool:
@@ -196,9 +207,16 @@ def validate_runtime_config() -> list[str]:
 
     if not has_gemini():
         warnings.append(
-            "GEMINI_API_KEY is not set. Analysis and chatbot will use rule-based "
-            "fallbacks until you add the key in Streamlit Cloud Secrets / .env."
+            "No Gemini API key set. Add GEMINI_API_KEY or GEMINI_API_KEY_1…_10 "
+            "in Streamlit Cloud Secrets / .env. Analysis and chatbot will use "
+            "rule-based fallbacks until then."
         )
+    else:
+        n = len(get_gemini_api_keys())
+        if n > 1:
+            warnings.append(
+                f"{n} Gemini API keys loaded — automatic failover is enabled."
+            )
     try:
         DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from src.chatbot import EXAMPLE_QUESTIONS, SYSTEM_INTRO, ask_product_manager
 from src.database import init_db
+from src.gemini_status_ui import render_gemini_key_caption
 from src.paths import ensure_runtime_dirs
 from src.streamlit_cache import cached_vector_stats
 from src.streamlit_playstore import render_last_updated_caption, render_sidebar_fetch_controls
@@ -35,6 +36,7 @@ st.caption(
     "evidence, root cause, and product opportunity."
 )
 render_last_updated_caption()
+render_gemini_key_caption()
 
 try:
     vs = cached_vector_stats()

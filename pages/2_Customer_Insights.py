@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.database import init_db
+from src.gemini_status_ui import render_gemini_key_caption
 from src.insights_ui import render_root_cause_analysis
 from src.paths import ensure_runtime_dirs
 from src.streamlit_cache import cached_discovery_dashboard, clear_data_caches
@@ -109,6 +110,7 @@ try:
     render_last_updated_caption()
 except Exception:
     st.caption("Last Updated: —")
+render_gemini_key_caption()
 
 dash: dict[str, Any] = {}
 try:

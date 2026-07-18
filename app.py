@@ -27,6 +27,7 @@ import streamlit as st
 
 from src.config import has_appstore, has_gemini, validate_runtime_config
 from src.data_pipeline import get_live_meta
+from src.gemini_status_ui import render_gemini_api_status, render_gemini_key_caption
 from src.paths import ensure_runtime_dirs
 from src.streamlit_cache import cached_collection_stats, cached_vector_stats
 from src.streamlit_playstore import render_sidebar_fetch_controls
@@ -158,6 +159,10 @@ with col_c:
         f'<span class="status-pill {cls}">{label}</span>',
         unsafe_allow_html=True,
     )
+render_gemini_key_caption()
+
+st.markdown("---")
+render_gemini_api_status(expanded=False)
 
 st.markdown("---")
 st.markdown(

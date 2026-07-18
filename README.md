@@ -67,38 +67,51 @@ streamlit run app.py
 
 ---
 
-## Gemini API key setup
+## Gemini API key setup (multi-key failover)
 
-The app reads `GEMINI_API_KEY` from **one place**: `src/config.py`.
+Keys are loaded by `src/gemini_key_manager.py` via `src/config.py`.
 
 Order: Streamlit Secrets → `.env` / environment variable.  
-Never hardcode keys in source code.
+Never hardcode keys in source code. Full keys are never shown in the UI.
 
-### Local
-
-Create a `.env` file in the project root:
+### Single key (backward compatible)
 
 ```env
 GEMINI_API_KEY=YOUR_API_KEY
-```
-
-Optional:
-
-```env
 GEMINI_MODEL=gemini-2.0-flash
 ```
 
-### Streamlit Cloud
+### Multiple keys (recommended for production / Cloud)
 
-App settings → **Secrets**:
+Support up to **10** keys. Empty values are ignored.
 
-```toml
-GEMINI_API_KEY = "YOUR_API_KEY"
+```env
+GEMINI_API_KEY=YOUR_PRIMARY_KEY
+GEMINI_API_KEY_1=YOUR_KEY_1
+GEMINI_API_KEY_2=YOUR_KEY_2
+GEMINI_API_KEY_3=YOUR_KEY_3
+GEMINI_API_KEY_4=YOUR_KEY_4
+GEMINI_MODEL=gemini-2.0-flash
 ```
 
-Optional:
+### Failover behavior
+
+When a Gemini request fails due to rate limits, quota exhaustion, timeouts, or temporary API errors, the app:
+
+1. Switches to the next available key  
+2. Retries with exponential backoff  
+3. Continues until a working key succeeds  
+
+If every key fails, analysis/chatbot use evidence-based fallbacks and show a clear error — the app does not crash.
+
+Home page → **Gemini API Status** shows total keys, active key index (e.g. `Using Gemini Key 2 of 4`), successes, failures, failovers, and last error.
+
+### Streamlit Cloud Secrets
 
 ```toml
+GEMINI_API_KEY = "YOUR_PRIMARY_KEY"
+GEMINI_API_KEY_1 = "YOUR_KEY_1"
+GEMINI_API_KEY_2 = "YOUR_KEY_2"
 GEMINI_MODEL = "gemini-2.0-flash"
 ```
 
@@ -108,17 +121,20 @@ GEMINI_MODEL = "gemini-2.0-flash"
 
 | Variable | Required | Description |
 |---|---|---|
-| `GEMINI_API_KEY` | Recommended | Gemini analysis + chatbot (Secrets or `.env`) |
+| `GEMINI_API_KEY` | Recommended | Primary Gemini key (backward compatible) |
+| `GEMINI_API_KEY_1` … `_10` | No | Extra keys for automatic failover |
 | `GEMINI_MODEL` | No | Default `gemini-2.0-flash` |
+| `GEMINI_MAX_ATTEMPTS` | No | Max retry attempts across keys (default `6`) |
+| `GEMINI_TIMEOUT_SEC` | No | Per-attempt timeout seconds (default `45`) |
 | `PLAYSTORE_APP_ID` | No | Default `com.zeptoconsumerapp` |
 | `PLAYSTORE_REVIEW_COUNT` | No | Default `500` |
 | `APPSTORE_APP_ID` | No | Default `1575323645` (Zepto iOS) |
 | `APPSTORE_ENABLED` | No | `1` on / `0` off |
 | `LIVE_CACHE_TTL_HOURS` | No | Default `6` |
 
-Google Play and App Store need **no API keys**. Without Gemini (or if the key is invalid), the app still runs with evidence-based fallback analysis so dashboards never crash.
+Google Play and App Store need **no API keys**. Without Gemini (or if all keys fail), the app still runs with evidence-based fallback analysis so dashboards never crash.
 
-Use a **Google AI Studio** Gemini API key (`GEMINI_API_KEY`). Keys that return `401 ACCESS_TOKEN_TYPE_unsupported` are not valid for this API.
+Use **Google AI Studio** Gemini API keys. Keys that return `401 ACCESS_TOKEN_TYPE_unsupported` are not valid for this API.
 
 ---
 

@@ -60,17 +60,27 @@ STRUCTURED_KEYS = (
 
 
 def _get_model():
-    # Resolve key/model from the single config source (Secrets → .env)
+    """
+    Backward-compatible model factory using the active key from the key manager.
+    Prefer generate_gemini_text() for failover-aware calls.
+    """
     if not has_gemini():
         raise RuntimeError(
-            "GEMINI_API_KEY is not configured. "
-            "Set it in .env locally or in Streamlit Cloud Secrets."
+            "No Gemini API key configured. "
+            "Set GEMINI_API_KEY or GEMINI_API_KEY_1…_10 in .env / Streamlit Secrets."
         )
-    from src.config import GEMINI_API_KEY, GEMINI_MODEL
+    from src.config import GEMINI_MODEL, get_gemini_api_key
     import google.generativeai as genai
 
-    genai.configure(api_key=GEMINI_API_KEY)
+    genai.configure(api_key=get_gemini_api_key())
     return genai.GenerativeModel(GEMINI_MODEL)
+
+
+def generate_gemini_text(prompt: str) -> str:
+    """Generate text via multi-key Gemini manager (automatic failover)."""
+    from src.gemini_key_manager import generate_with_failover
+
+    return generate_with_failover(prompt)
 
 
 def _extract_json(raw: str) -> dict[str, Any]:
@@ -277,9 +287,8 @@ def analyze_review(
     )
 
     try:
-        model = _get_model()
-        response = model.generate_content(prompt)
-        data = _extract_json(response.text or "")
+        raw = generate_gemini_text(prompt)
+        data = _extract_json(raw or "")
         return _normalize(data, text)
     except Exception as exc:
         logger.warning("Gemini analysis failed: %s", exc)
@@ -389,9 +398,7 @@ Be specific to Zepto quick commerce. Align with dashboard insights when provided
 Do not invent fake quotes that contradict the evidence.
 """
     try:
-        model = _get_model()
-        response = model.generate_content(prompt)
-        return (response.text or "").strip()
+        return generate_gemini_text(prompt)
     except Exception as exc:
         logger.error("PM answer generation failed: %s", exc)
         # Fall back to structured evidence brief (no live Gemini)

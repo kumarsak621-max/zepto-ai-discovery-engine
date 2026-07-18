@@ -9,19 +9,17 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from typing import Any
 
 from src.config import EXPLORATION_BARRIER_THEMES, has_gemini
 from src.data_pipeline import get_live_meta
 from src.database import get_collection_stats, get_pm_insights
-from src.gemini_analysis import _extract_json, _get_model
+from src.gemini_analysis import _extract_json, generate_gemini_text
 from src.paths import DATA_DIR, ensure_runtime_dirs
 
 logger = logging.getLogger(__name__)
 
 DISCOVERY_CACHE_PATH = DATA_DIR / "discovery_insights_cache.json"
-GEMINI_DISCOVERY_TIMEOUT_SEC = 25
 
 DASHBOARD_PROMPT = """You are a Product Growth analyst for Zepto (Indian quick commerce).
 
@@ -821,9 +819,8 @@ def clear_discovery_disk_cache() -> None:
 
 
 def _call_gemini_discovery_json(prompt: str) -> dict[str, Any]:
-    model = _get_model()
-    response = model.generate_content(prompt)
-    return _extract_json(response.text or "")
+    raw = generate_gemini_text(prompt)
+    return _extract_json(raw or "")
 
 
 def _is_auth_error(exc: BaseException) -> bool:
@@ -891,9 +888,8 @@ def generate_gemini_discovery(
         samples="\n".join(sample_lines)[:8000],
     )
     try:
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_call_gemini_discovery_json, prompt)
-            data = future.result(timeout=GEMINI_DISCOVERY_TIMEOUT_SEC)
+        # Key manager handles timeouts, retries, and multi-key failover
+        data = _call_gemini_discovery_json(prompt)
         normalized = _normalize_gemini_payload(data, kpi_seeds)
         # Ensure required lists are populated from evidence-based fallback
         if not normalized["category_exploration_opportunities"]:
@@ -925,19 +921,15 @@ def generate_gemini_discovery(
             return fallback
         _save_discovery_disk_cache(cache_key, normalized)
         return normalized
-    except FuturesTimeout:
-        logger.warning(
-            "Gemini discovery timed out after %ss — using evidence fallback",
-            GEMINI_DISCOVERY_TIMEOUT_SEC,
-        )
-        fallback = {**fallback, "source": "fallback-timeout"}
-        _save_discovery_disk_cache(cache_key, fallback)
-        return fallback
     except Exception as exc:
-        if _is_auth_error(exc):
+        msg = str(exc).lower()
+        if "timed out" in msg or "timeout" in msg:
+            logger.warning("Gemini discovery timed out — using evidence fallback")
+            fallback = {**fallback, "source": "fallback-timeout"}
+        elif _is_auth_error(exc):
             logger.warning(
                 "Gemini auth/config error — using evidence fallback. "
-                "Set a valid GEMINI_API_KEY in .env or Streamlit Secrets."
+                "Set valid GEMINI_API_KEY / GEMINI_API_KEY_1…_10 in .env or Secrets."
             )
             fallback = {**fallback, "source": "fallback-auth"}
         else:
