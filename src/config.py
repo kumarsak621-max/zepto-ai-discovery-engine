@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -51,14 +50,6 @@ def _env_int(name: str, default: int) -> int:
 
 def _env_str(name: str, default: str = "") -> str:
     return _secret_or_env(name, default)
-
-
-def _first_env(*names: str, default: str = "") -> str:
-    for name in names:
-        value = _secret_or_env(name, "")
-        if value:
-            return value
-    return default
 
 
 try:
@@ -113,14 +104,6 @@ def get_gemini_model() -> str:
 GEMINI_API_KEY = get_gemini_api_key()
 GEMINI_MODEL = get_gemini_model()
 
-REDDIT_CLIENT_ID = _env_str("REDDIT_CLIENT_ID", "")
-REDDIT_CLIENT_SECRET = _first_env("REDDIT_CLIENT_SECRET", "REDDIT_SECRET", default="")
-REDDIT_SECRET = REDDIT_CLIENT_SECRET
-REDDIT_USER_AGENT = _env_str(
-    "REDDIT_USER_AGENT", "zepto_ai_engine/1.0 by ZeptoPMResearch"
-)
-REDDIT_POST_LIMIT = _env_int("REDDIT_POST_LIMIT", 50)
-
 TWITTER_BEARER_TOKEN = _env_str("TWITTER_BEARER_TOKEN", "")
 
 PLAYSTORE_APP_ID = _env_str("PLAYSTORE_APP_ID", "com.zeptoconsumerapp")
@@ -145,23 +128,7 @@ LIVE_CACHE_TTL_HOURS = _env_int("LIVE_CACHE_TTL_HOURS", 6)
 REVIEWS_CSV_PATH = DATA_DIR / "reviews.csv"
 LIVE_META_PATH = DATA_DIR / "live_reviews_meta.json"
 
-LIVE_CHAT_SOURCES = ("playstore", "appstore", "reddit")
-
-REDDIT_SUBREDDITS = [
-    "india",
-    "IndianFood",
-    "bangalore",
-    "mumbai",
-    "delhi",
-]
-
-REDDIT_KEYWORDS = [
-    "Zepto",
-    "quick commerce",
-    "Zepto review",
-    "Blinkit vs Zepto",
-    "online grocery shopping",
-]
+LIVE_CHAT_SOURCES = ("playstore", "appstore", "manual")
 
 THEME_TAXONOMY = [
     "Product discovery issue",
@@ -208,16 +175,6 @@ def has_gemini() -> bool:
     return bool(GEMINI_API_KEY.strip())
 
 
-def has_reddit() -> bool:
-    return bool(
-        REDDIT_CLIENT_ID
-        and REDDIT_CLIENT_ID != "your_reddit_client_id"
-        and REDDIT_CLIENT_SECRET
-        and REDDIT_CLIENT_SECRET
-        not in {"your_reddit_secret", "your_reddit_client_secret"}
-    )
-
-
 def has_appstore() -> bool:
     return bool(APPSTORE_ENABLED and APPSTORE_APP_ID)
 
@@ -234,8 +191,6 @@ def validate_runtime_config() -> list[str]:
             "GEMINI_API_KEY is not set. Analysis and chatbot will use rule-based "
             "fallbacks until you add the key in Streamlit Cloud Secrets / .env."
         )
-    if not has_reddit():
-        warnings.append("Reddit is not configured.")
     try:
         DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

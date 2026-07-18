@@ -17,7 +17,7 @@ from src.data_pipeline import get_live_meta
 from src.paths import ensure_runtime_dirs
 from src.streamlit_cache import cached_collection_stats, cached_vector_stats, clear_data_caches
 from src.streamlit_playstore import format_last_updated, render_sidebar_fetch_controls
-from src.streamlit_sources import render_live_review_controls
+from src.streamlit_sources import render_live_review_controls, show_source_metrics
 
 st.set_page_config(page_title="Data Collection Status", page_icon="📊", layout="wide")
 
@@ -31,10 +31,12 @@ except Exception as exc:
 render_sidebar_fetch_controls()
 
 st.title("📊 Data Collection Status")
-st.caption("Automated live ingestion from Google Play, App Store, and optional Reddit.")
+st.caption(
+    "Live ingestion from Google Play + Apple App Store, with optional manual CSV/Excel upload."
+)
 
 live_meta = get_live_meta()
-st.caption(f"Last Updated: **{format_last_updated(live_meta.get('last_updated'))}**")
+show_source_metrics(live_meta)
 
 try:
     stats = cached_collection_stats()
@@ -73,10 +75,12 @@ else:
 
 st.subheader("Latest pipeline run")
 if last_run:
-    r1, r2, r3 = st.columns(3)
+    r1, r2, r3, r4 = st.columns(4)
     r1.metric("Status", last_run.get("status", "—"))
-    r2.metric("Play Store fetched", last_run.get("playstore_count", 0))
-    r3.metric("New after dedupe", last_run.get("new_reviews", 0))
+    r2.metric("Play Store", last_run.get("playstore_count", 0))
+    r3.metric("App Store", last_run.get("appstore_count", 0))
+    r4.metric("Manual", last_run.get("manual_count", 0))
+    st.metric("New after dedupe", last_run.get("new_reviews", 0))
     st.write(
         f"Started: `{last_run.get('started_at')}` · Finished: `{last_run.get('finished_at')}`"
     )

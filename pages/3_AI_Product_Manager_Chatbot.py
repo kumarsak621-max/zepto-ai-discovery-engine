@@ -30,8 +30,9 @@ render_sidebar_fetch_controls()
 
 st.title("🤖 AI Product Manager Chatbot")
 st.caption(
-    "Ask research questions. The assistant retrieves the latest analyzed Google Play "
-    "reviews, then Gemini synthesizes insight, evidence, root cause, and product opportunity."
+    "Ask research questions. The assistant retrieves the latest analyzed reviews "
+    "(Google Play, App Store, and manual uploads), then Gemini synthesizes insight, "
+    "evidence, root cause, and product opportunity."
 )
 render_last_updated_caption()
 

@@ -2,9 +2,7 @@
 
 **AI-Powered Customer Intelligence Assistant for Product Managers**
 
-Automatically collect **live** Zepto reviews from online sources (Google Play, optional App Store & Reddit), analyze them with Gemini, store everything in SQLite (`feedback.db`), and ask product research questions with evidence-backed answers.
-
-**No manual CSV upload.** Reviews are fetched online when you run analysis.
+Automatically collect **live** Zepto reviews from Google Play and Apple App Store, optionally merge **manual CSV/Excel uploads**, analyze them with Gemini, store everything in SQLite (`feedback.db`), and ask product research questions with evidence-backed answers.
 
 Lightweight and **Streamlit Community Cloud** friendly — no ChromaDB, no embeddings, no torch.
 
@@ -15,8 +13,9 @@ Lightweight and **Streamlit Community Cloud** friendly — no ChromaDB, no embed
 | Capability | Description |
 |---|---|
 | **Live Google Play fetch** | Newest English Zepto reviews (`com.zeptoconsumerapp`) |
-| **Apple App Store** | Optional iTunes RSS reviews (`APPSTORE_APP_ID`) |
-| **Reddit** | Optional — only when API credentials are configured |
+| **Apple App Store** | iTunes RSS reviews (`APPSTORE_APP_ID`) |
+| **Manual upload** | CSV / Excel reviews with auto column detection |
+| **Merged analysis** | Sources combined + deduped before Gemini |
 | **Gemini analysis** | Sentiment · Theme · Intent · Segment · Pain · Opportunity |
 | **Insights dashboards** | Totals, ratings, sentiment, habits, segments, AI summary |
 | **PM chatbot** | Answers from fetched reviews; supports “latest / live reviews” |
@@ -45,7 +44,7 @@ zepto/
     ├── paths.py
     ├── playstore_scraper.py
     ├── appstore_scraper.py
-    ├── reddit_scraper.py
+    ├── manual_reviews.py
     ├── data_pipeline.py
     ├── gemini_analysis.py
     ├── rag_pipeline.py
@@ -114,7 +113,6 @@ GEMINI_MODEL = "gemini-2.0-flash"
 | `PLAYSTORE_REVIEW_COUNT` | No | Default `500` |
 | `APPSTORE_APP_ID` | No | Default `1575323645` (Zepto iOS) |
 | `APPSTORE_ENABLED` | No | `1` on / `0` off |
-| `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` | No | If missing: *Reddit is not configured.* |
 | `LIVE_CACHE_TTL_HOURS` | No | Default `6` |
 
 Google Play and App Store need **no API keys**. Without Gemini, rule-based analysis still runs.
@@ -123,9 +121,30 @@ Google Play and App Store need **no API keys**. Without Gemini, rule-based analy
 
 ## Usage
 
-1. Click **▶ Run Review Analysis** — collects configured online sources (uses cache when fresh)
-2. Or click **🔄 Refresh Live Reviews** — force newest download + Gemini analysis
-3. Open **Customer Insights** and **AI Product Manager Chatbot**
+1. (Optional) Sidebar → **📂 Upload Manual Reviews** — upload a `.csv` or `.xlsx`
+2. Click **▶ Run Review Analysis** — collects Google Play + App Store, merges manual file if present
+3. Or click **🔄 Refresh Live Reviews** — force newest download + Gemini analysis
+4. Open **Customer Insights** and **AI Product Manager Chatbot**
+
+### Manual upload columns
+
+Auto-detected (case-insensitive):
+
+- Text: `review_text`, `text`, `content`, `review`
+- Rating: `rating`, `score`, `stars`
+- Date: `date`, `review_date`, `created_at`
+- Source: `source` (informational; stored as `manual`)
+- ID: `review_id`, `id`, `external_id`
+
+### Failover
+
+| Situation | Behavior |
+|---|---|
+| No manual file | Google Play + App Store only |
+| Google Play fails | App Store + Manual |
+| App Store fails | Google Play + Manual |
+| Both live sources fail | Manual only |
+| All sources empty | Friendly error — app does not crash |
 
 Chatbot tips:
 
@@ -146,9 +165,9 @@ Chatbot tips:
    GEMINI_API_KEY = "YOUR_API_KEY"
    ```
 
-5. Deploy → click **🔄 Refresh Live Reviews**
+5. Deploy → optionally upload a manual file → click **🔄 Refresh Live Reviews**
 
-Note: Cloud storage is ephemeral — re-refresh after cold starts / redeploys.
+Note: Cloud storage is ephemeral — re-upload / re-refresh after cold starts / redeploys.
 
 ---
 
@@ -157,11 +176,11 @@ Note: Cloud storage is ephemeral — re-refresh after cold starts / redeploys.
 ```
 Run Review Analysis / Refresh Live Reviews
    ↓
-Google Play (+ App Store if enabled + Reddit if configured)
+Google Play → Apple App Store → Manual upload (if present)
    ↓
-Merge + dedupe → data/ + feedback.db
+Merge + dedupe (review_id / text similarity / rating+date)
    ↓
-Gemini analysis
+Gemini analysis → feedback.db
    ↓
-Dashboards + chatbot use fetched evidence only
+Dashboards + chatbot refresh automatically
 ```

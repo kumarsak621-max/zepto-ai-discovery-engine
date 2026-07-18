@@ -25,12 +25,12 @@ except ImportError:
 
 import streamlit as st
 
-from src.config import has_appstore, has_gemini, has_reddit, validate_runtime_config
+from src.config import has_appstore, has_gemini, validate_runtime_config
 from src.data_pipeline import get_live_meta
 from src.paths import ensure_runtime_dirs
 from src.streamlit_cache import cached_collection_stats, cached_vector_stats
-from src.streamlit_playstore import format_last_updated, render_sidebar_fetch_controls
-from src.streamlit_sources import render_live_review_controls
+from src.streamlit_playstore import render_sidebar_fetch_controls
+from src.streamlit_sources import render_live_review_controls, show_source_metrics
 
 st.set_page_config(
     page_title="Zepto AI Discovery Engine",
@@ -124,19 +124,17 @@ except Exception as exc:
     stats, vs = {"total": 0, "by_source": {}, "avg_rating": None}, {"count": 0}
 
 live_meta = get_live_meta()
-st.caption(
-    f"Last Updated: **{format_last_updated(live_meta.get('last_updated'))}**"
-)
+st.subheader("Source metrics")
+show_source_metrics(live_meta)
 
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Total Reviews", f"{stats.get('total', 0):,}")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Total in DB", f"{stats.get('total', 0):,}")
 c2.metric(
     "Average Rating",
     f"{stats['avg_rating']:.2f}" if stats.get("avg_rating") is not None else "—",
 )
 c3.metric("Reviews in SQLite", f"{vs.get('count', 0):,}")
 c4.metric("Sources active", len(stats.get("by_source") or {}))
-c5.metric("Last Updated", format_last_updated(live_meta.get("last_updated")))
 
 st.subheader("System readiness")
 col_a, col_b, col_c = st.columns(3)
@@ -160,21 +158,20 @@ with col_c:
         f'<span class="status-pill {cls}">{label}</span>',
         unsafe_allow_html=True,
     )
-if not has_reddit():
-    st.caption("Reddit is not configured.")
 
 st.markdown("---")
 st.markdown(
     """
 ### What this tool does for PMs
 
-1. **Automatically collects** live Zepto reviews from Google Play (plus App Store / Reddit when configured)
-2. **Cleans & deduplicates** feedback into `feedback.db`
+1. **Collects** live Zepto reviews from Google Play and Apple App Store, plus optional manual CSV/Excel uploads
+2. **Merges & deduplicates** feedback into `feedback.db`
 3. **Analyzes** each item with Gemini for sentiment, theme, intent, and opportunities
 4. **Powers the PM chatbot** using fetched review evidence from SQLite
 
-Use the sidebar pages:
+Use the sidebar:
 
+- **📂 Upload Manual Reviews** — CSV / Excel
 - **Data Collection Status** — pipeline health & volume
 - **Customer Insights** — complaints, themes, sentiment
 - **AI Product Manager Chatbot** — ask research questions with evidence

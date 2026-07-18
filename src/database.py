@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     finished_at TEXT,
     status TEXT NOT NULL,
     playstore_count INTEGER DEFAULT 0,
-    reddit_count INTEGER DEFAULT 0,
+    appstore_count INTEGER DEFAULT 0,
+    manual_count INTEGER DEFAULT 0,
     twitter_count INTEGER DEFAULT 0,
     new_reviews INTEGER DEFAULT 0,
     analyzed_count INTEGER DEFAULT 0,
@@ -104,6 +105,21 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_reviews_segment ON reviews(customer_segment)"
     )
+
+    # pipeline_runs: replace legacy reddit_count with appstore/manual counts
+    run_cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(pipeline_runs)").fetchall()
+    }
+    if run_cols:
+        if "appstore_count" not in run_cols:
+            conn.execute(
+                "ALTER TABLE pipeline_runs ADD COLUMN appstore_count INTEGER DEFAULT 0"
+            )
+        if "manual_count" not in run_cols:
+            conn.execute(
+                "ALTER TABLE pipeline_runs ADD COLUMN manual_count INTEGER DEFAULT 0"
+            )
 
 
 def init_db(db_path: Path | None = None) -> Path:
@@ -531,28 +547,49 @@ def finish_pipeline_run(
 ) -> None:
     counts = counts or {}
     with get_connection(db_path) as conn:
-        conn.execute(
-            """
+        run_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(pipeline_runs)").fetchall()
+        }
+        if "appstore_count" not in run_cols:
+            conn.execute(
+                "ALTER TABLE pipeline_runs ADD COLUMN appstore_count INTEGER DEFAULT 0"
+            )
+            run_cols.add("appstore_count")
+        if "manual_count" not in run_cols:
+            conn.execute(
+                "ALTER TABLE pipeline_runs ADD COLUMN manual_count INTEGER DEFAULT 0"
+            )
+            run_cols.add("manual_count")
+
+        sql = """
             UPDATE pipeline_runs
             SET finished_at = ?, status = ?,
-                playstore_count = ?, reddit_count = ?, twitter_count = ?,
-                new_reviews = ?, analyzed_count = ?, embedded_count = ?,
-                error_message = ?
+                playstore_count = ?, appstore_count = ?, manual_count = ?,
+                twitter_count = ?, new_reviews = ?, analyzed_count = ?,
+                embedded_count = ?, error_message = ?
             WHERE id = ?
-            """,
-            (
-                datetime.now(timezone.utc).isoformat(),
-                status,
-                counts.get("playstore_count", 0),
-                counts.get("reddit_count", 0),
-                counts.get("twitter_count", 0),
-                counts.get("new_reviews", 0),
-                counts.get("analyzed_count", 0),
-                counts.get("embedded_count", 0),
-                error_message,
-                run_id,
-            ),
-        )
+        """
+        params: list[Any] = [
+            datetime.now(timezone.utc).isoformat(),
+            status,
+            counts.get("playstore_count", 0),
+            counts.get("appstore_count", 0),
+            counts.get("manual_count", 0),
+            counts.get("twitter_count", 0),
+            counts.get("new_reviews", 0),
+            counts.get("analyzed_count", 0),
+            counts.get("embedded_count", 0),
+            error_message,
+            run_id,
+        ]
+        conn.execute(sql, tuple(params))
+        # Zero legacy reddit_count on older databases
+        if "reddit_count" in run_cols:
+            conn.execute(
+                "UPDATE pipeline_runs SET reddit_count = 0 WHERE id = ?",
+                (run_id,),
+            )
 
 
 def clean_text(text: str) -> str:

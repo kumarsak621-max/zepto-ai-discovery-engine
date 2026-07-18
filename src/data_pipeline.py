@@ -1,13 +1,14 @@
 """
 End-to-end data ingestion pipeline:
 
-Collect online sources → Clean → Deduplicate → Gemini analysis → Store → Chatbot ready
+Collect online sources + optional manual upload → Clean → Deduplicate → Gemini → Store
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,7 +21,6 @@ from src.config import (
     PLAYSTORE_CACHE_TTL_HOURS,
     PLAYSTORE_REVIEW_COUNT,
     has_appstore,
-    has_reddit,
 )
 from src.database import (
     bulk_upsert,
@@ -32,6 +32,7 @@ from src.database import (
     update_analysis,
 )
 from src.gemini_analysis import analyze_review
+from src.manual_reviews import load_manual_reviews
 from src.paths import DATA_DIR, ensure_runtime_dirs
 from src.playstore_scraper import (
     cache_is_fresh,
@@ -41,10 +42,52 @@ from src.playstore_scraper import (
     load_reviews_from_csv,
     save_reviews_csv,
 )
-from src.reddit_scraper import collect_reddit_or_empty
 from src.twitter_placeholder import collect_twitter_mentions
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_text_key(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def _date_key(value: Any) -> str:
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if not s:
+        return ""
+    # Prefer YYYY-MM-DD when present
+    m = re.search(r"\d{4}-\d{2}-\d{2}", s)
+    if m:
+        return m.group(0)
+    return s[:10]
+
+
+def _rating_key(value: Any) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    try:
+        return f"{float(value):.1f}"
+    except (TypeError, ValueError):
+        return str(value).strip()
+
+
+def _text_similar(a: str, b: str) -> bool:
+    """Lightweight similarity: containment or high word overlap."""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    if len(shorter) >= 40 and shorter in longer:
+        return True
+    wa = set(shorter.split())
+    wb = set(longer.split())
+    if not wa or not wb:
+        return False
+    overlap = len(wa & wb) / max(len(wa), 1)
+    return overlap >= 0.85 and abs(len(wa) - len(wb)) <= max(3, len(wa) // 5)
 
 
 def _clean_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -61,22 +104,58 @@ def _clean_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def merge_and_dedupe_reviews(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge multi-source reviews; dedupe by external_id and normalized text."""
+    """
+    Merge multi-source reviews; dedupe by:
+      • review_id / external_id
+      • review text similarity
+      • rating + date (+ text fingerprint)
+    """
     cleaned = _clean_records(records)
     seen_ids: set[str] = set()
     seen_text: set[str] = set()
+    seen_rating_date: set[str] = set()
+    kept: list[tuple[str, str, str]] = []  # text_key, rating_key, date_key
     merged: list[dict[str, Any]] = []
 
     for row in cleaned:
-        text_key = row["text"].strip().lower()
-        eid = str(row.get("external_id") or "").strip()
+        text_key = _normalize_text_key(row["text"])
+        eid = str(
+            row.get("external_id") or row.get("review_id") or ""
+        ).strip()
+        rkey = _rating_key(row.get("rating"))
+        dkey = _date_key(row.get("date"))
+        rating_date_key = f"{rkey}|{dkey}|{text_key[:80]}" if (rkey or dkey) else ""
+
         if eid and eid in seen_ids:
             continue
         if text_key in seen_text:
             continue
+        if rating_date_key and rating_date_key in seen_rating_date:
+            continue
+
+        # Near-duplicate: similar text with the same rating + date
+        is_near_dup = False
+        for prev_text, prev_r, prev_d in kept:
+            if not _text_similar(text_key, prev_text):
+                continue
+            if rkey and dkey and rkey == prev_r and dkey == prev_d:
+                is_near_dup = True
+                break
+            if not rkey and not dkey and (
+                text_key == prev_text
+                or (len(text_key) >= 40 and text_key in prev_text)
+            ):
+                is_near_dup = True
+                break
+        if is_near_dup:
+            continue
+
         if eid:
             seen_ids.add(eid)
         seen_text.add(text_key)
+        if rating_date_key:
+            seen_rating_date.add(rating_date_key)
+        kept.append((text_key, rkey, dkey))
         merged.append(row)
 
     logger.info("Merged %s raw rows → %s unique reviews", len(cleaned), len(merged))
@@ -119,7 +198,7 @@ def save_live_meta(counts: dict[str, Any], *, forced: bool = False) -> dict[str,
         "forced_refresh": forced,
         "playstore_count": int(counts.get("playstore_count") or 0),
         "appstore_count": int(counts.get("appstore_count") or 0),
-        "reddit_count": int(counts.get("reddit_count") or 0),
+        "manual_count": int(counts.get("manual_count") or 0),
         "merged_count": int(counts.get("merged_count") or 0),
         "analyzed_count": int(counts.get("analyzed_count") or 0),
         "new_reviews": int(counts.get("new_reviews") or 0),
@@ -184,15 +263,18 @@ def run_live_review_analysis(
     progress_callback: Any | None = None,
 ) -> dict[str, Any]:
     """
-    Automatically collect from configured online sources, merge, dedupe,
+    Collect Google Play + App Store + optional manual uploads, merge, dedupe,
     run Gemini analysis, and refresh the local knowledge base.
+
+    Failover: each source failure is non-fatal. Analysis proceeds with whatever
+    sources succeed. Only fails when zero reviews are available from all sources.
     """
     init_db()
     run_id = start_pipeline_run()
     counts: dict[str, int] = {
         "playstore_count": 0,
         "appstore_count": 0,
-        "reddit_count": 0,
+        "manual_count": 0,
         "twitter_count": 0,
         "merged_count": 0,
         "new_reviews": 0,
@@ -208,7 +290,7 @@ def run_live_review_analysis(
             progress_callback(pct, msg)
 
     try:
-        # --- Google Play (always) ---
+        # --- Step 1: Google Play ---
         _progress(0.05, "Collecting Google Play reviews…")
         try:
             try:
@@ -239,7 +321,7 @@ def run_live_review_analysis(
             logger.exception("Google Play collection failed")
             source_messages.append(f"Google Play unavailable: {exc}")
 
-        # --- App Store (if configured) ---
+        # --- Step 2: Apple App Store ---
         _progress(0.40, "Collecting App Store reviews…")
         if has_appstore():
             try:
@@ -247,34 +329,37 @@ def run_live_review_analysis(
                 counts["appstore_count"] = len(appstore)
                 collected.extend(appstore)
                 if not appstore:
-                    source_messages.append("App Store returned no reviews (skipped).")
+                    source_messages.append("App Store returned no reviews.")
             except Exception as exc:
                 logger.exception("App Store collection failed")
                 source_messages.append(f"App Store unavailable: {exc}")
         else:
             source_messages.append("App Store is not configured.")
 
-        # --- Reddit (only if credentials exist) ---
-        _progress(0.55, "Collecting Reddit discussions…")
-        if has_reddit():
-            try:
-                reddit = collect_reddit_or_empty()
-                counts["reddit_count"] = len(reddit)
-                collected.extend(reddit)
-                if not reddit:
-                    source_messages.append("Reddit returned no discussions.")
-            except Exception as exc:
-                logger.exception("Reddit collection failed")
-                source_messages.append(f"Reddit unavailable: {exc}")
-        else:
-            source_messages.append("Reddit is not configured.")
+        # --- Step 3: Manual upload (if present) ---
+        _progress(0.55, "Loading manual uploaded reviews…")
+        try:
+            manual = load_manual_reviews()
+            counts["manual_count"] = len(manual)
+            if manual:
+                collected.extend(manual)
+                source_messages.append(f"Manual upload: {len(manual)} reviews loaded.")
+            else:
+                source_messages.append(
+                    "No manual review file uploaded — using live sources only."
+                )
+        except Exception as exc:
+            logger.exception("Manual review load failed")
+            source_messages.append(f"Manual upload unavailable: {exc}")
 
+        # --- Failover: never crash if at least one source has data ---
         if not collected:
             raise RuntimeError(
-                "No reviews collected from online sources. "
+                "No reviews available from Google Play, App Store, or manual upload. "
                 + " ".join(source_messages)
             )
 
+        # --- Steps 4–6: Merge + dedupe ---
         _progress(0.70, "Merging sources and removing duplicates…")
         merged = merge_and_dedupe_reviews(collected)
         counts["merged_count"] = len(merged)
@@ -284,10 +369,12 @@ def run_live_review_analysis(
         inserted = bulk_upsert(merged)
         counts["new_reviews"] = inserted
 
+        # --- Step 7: Gemini ---
         _progress(0.90, "Running Gemini analysis on merged dataset…")
         analyzed = run_analysis(batch_size=max(analyze_limit, len(merged) or 1))
         counts["analyzed_count"] = analyzed
 
+        # --- Step 8: Refresh meta for dashboards / chatbot ---
         live_meta = save_live_meta(counts, forced=force_refresh)
         _progress(1.0, "Done")
         finish_pipeline_run(run_id, status="success", counts=counts)
@@ -322,7 +409,8 @@ def run_collection() -> dict[str, int]:
     result = run_live_review_analysis(force_refresh=False, analyze_limit=200)
     return {
         "playstore_count": int(result.get("playstore_count") or 0),
-        "reddit_count": int(result.get("reddit_count") or 0),
+        "appstore_count": int(result.get("appstore_count") or 0),
+        "manual_count": int(result.get("manual_count") or 0),
         "twitter_count": int(result.get("twitter_count") or 0),
         "new_reviews": int(result.get("new_reviews") or 0),
     }
