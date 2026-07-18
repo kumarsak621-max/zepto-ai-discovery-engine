@@ -11,6 +11,9 @@ data/reviews.csv
 data/reviews_cache_meta.json
 data/merged_reviews.csv
 data/live_reviews_meta.json
+data/discovery_insights_cache.json
+data/manual_reviews.csv
+data/manual_reviews_meta.json
 cache/*
 !cache/.gitkeep
 !cache/README.md

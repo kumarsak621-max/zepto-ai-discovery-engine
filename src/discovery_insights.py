@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from typing import Any
 
 from src.config import EXPLORATION_BARRIER_THEMES, has_gemini
@@ -20,6 +21,7 @@ from src.paths import DATA_DIR, ensure_runtime_dirs
 logger = logging.getLogger(__name__)
 
 DISCOVERY_CACHE_PATH = DATA_DIR / "discovery_insights_cache.json"
+GEMINI_DISCOVERY_TIMEOUT_SEC = 25
 
 DASHBOARD_PROMPT = """You are a Product Growth analyst for Zepto (Indian quick commerce).
 
@@ -687,6 +689,16 @@ def _normalize_gemini_payload(data: dict[str, Any], kpi_seeds: dict[str, float])
 
     segments = []
     for row in data.get("ai_user_segments") or []:
+        if isinstance(row, str) and row.strip():
+            segments.append(
+                {
+                    "segment": row.strip()[:80],
+                    "percentage": 0,
+                    "key_characteristics": "",
+                    "typical_shopping_behaviour": "",
+                }
+            )
+            continue
         if not isinstance(row, dict):
             continue
         segments.append(
@@ -695,16 +707,25 @@ def _normalize_gemini_payload(data: dict[str, Any], kpi_seeds: dict[str, float])
                 "percentage": _clamp_score(row.get("percentage"), 0),
                 "key_characteristics": str(row.get("key_characteristics") or "")[:240],
                 "typical_shopping_behaviour": str(
-                    row.get("typical_shopping_behaviour") or ""
+                    row.get("typical_shopping_behaviour")
+                    or row.get("typical_shopping_behavior")
+                    or ""
                 )[:240],
             }
         )
 
-    habits = [
-        str(h).strip()
-        for h in (data.get("shopping_habit_insights") or [])
-        if str(h).strip()
-    ][:8]
+    raw_habits = data.get("shopping_habit_insights") or []
+    if isinstance(raw_habits, str):
+        raw_habits = [raw_habits]
+    habits = []
+    for h in raw_habits:
+        if isinstance(h, dict):
+            text = str(h.get("insight") or h.get("text") or h.get("summary") or "").strip()
+        else:
+            text = str(h).strip()
+        if text:
+            habits.append(text)
+    habits = habits[:8]
 
     barriers = []
     for row in data.get("discovery_barriers") or []:
@@ -749,15 +770,28 @@ def _discovery_cache_key(insights: dict[str, Any]) -> str:
     )
 
 
+def _discovery_payload_is_valid(discovery: dict[str, Any] | None) -> bool:
+    if not isinstance(discovery, dict):
+        return False
+    rca = discovery.get("root_cause_analysis") or {}
+    causes = rca.get("causes") if isinstance(rca, dict) else None
+    if not isinstance(causes, list) or not causes:
+        return False
+    if not isinstance(discovery.get("growth_kpis"), dict):
+        return False
+    if not isinstance(discovery.get("ai_user_segments"), list):
+        return False
+    return True
+
+
 def _load_discovery_disk_cache(cache_key: str) -> dict[str, Any] | None:
     if not DISCOVERY_CACHE_PATH.exists():
         return None
     try:
         payload = json.loads(DISCOVERY_CACHE_PATH.read_text(encoding="utf-8"))
-        if payload.get("cache_key") == cache_key and isinstance(
-            payload.get("discovery"), dict
-        ):
-            return payload["discovery"]
+        discovery = payload.get("discovery")
+        if payload.get("cache_key") == cache_key and _discovery_payload_is_valid(discovery):
+            return discovery
     except Exception:
         return None
     return None
@@ -786,23 +820,45 @@ def clear_discovery_disk_cache() -> None:
         logger.warning("Could not clear discovery cache: %s", exc)
 
 
+def _call_gemini_discovery_json(prompt: str) -> dict[str, Any]:
+    model = _get_model()
+    response = model.generate_content(prompt)
+    return _extract_json(response.text or "")
+
+
+def _is_auth_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(
+        token in text
+        for token in (
+            "401",
+            "403",
+            "api key",
+            "invalid authentication",
+            "access_token_type_unsupported",
+            "permission_denied",
+            "unauthenticated",
+        )
+    )
+
+
 def generate_gemini_discovery(
     reviews: list[dict[str, Any]],
     insights: dict[str, Any],
 ) -> dict[str, Any]:
     kpi_seeds = compute_growth_kpi_seeds(reviews, insights)
+    fallback = _fallback_discovery(reviews, insights, kpi_seeds)
     if not reviews:
-        return _fallback_discovery(reviews, insights, kpi_seeds)
+        return fallback
 
     cache_key = _discovery_cache_key(insights)
     cached = _load_discovery_disk_cache(cache_key)
-    if cached and cached.get("root_cause_analysis"):
+    if cached:
         return cached
 
     if not has_gemini():
-        result = _fallback_discovery(reviews, insights, kpi_seeds)
-        _save_discovery_disk_cache(cache_key, result)
-        return result
+        _save_discovery_disk_cache(cache_key, fallback)
+        return fallback
 
     sample_lines = []
     for r in reviews[:40]:
@@ -835,34 +891,28 @@ def generate_gemini_discovery(
         samples="\n".join(sample_lines)[:8000],
     )
     try:
-        model = _get_model()
-        response = model.generate_content(prompt)
-        data = _extract_json(response.text or "")
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_call_gemini_discovery_json, prompt)
+            data = future.result(timeout=GEMINI_DISCOVERY_TIMEOUT_SEC)
         normalized = _normalize_gemini_payload(data, kpi_seeds)
-        # Ensure required lists are populated
+        # Ensure required lists are populated from evidence-based fallback
         if not normalized["category_exploration_opportunities"]:
-            fb = _fallback_discovery(reviews, insights, kpi_seeds)
-            normalized["category_exploration_opportunities"] = fb[
+            normalized["category_exploration_opportunities"] = fallback[
                 "category_exploration_opportunities"
             ]
         if len(normalized["growth_recommendations"]) < 5:
-            fb = _fallback_discovery(reviews, insights, kpi_seeds)
-            normalized["growth_recommendations"] = fb["growth_recommendations"]
+            normalized["growth_recommendations"] = fallback["growth_recommendations"]
         if not normalized["ai_user_segments"]:
-            fb = _fallback_discovery(reviews, insights, kpi_seeds)
-            normalized["ai_user_segments"] = fb["ai_user_segments"]
+            normalized["ai_user_segments"] = fallback["ai_user_segments"]
         if not normalized["shopping_habit_insights"]:
-            fb = _fallback_discovery(reviews, insights, kpi_seeds)
-            normalized["shopping_habit_insights"] = fb["shopping_habit_insights"]
+            normalized["shopping_habit_insights"] = fallback["shopping_habit_insights"]
         if not normalized["discovery_barriers"]:
-            fb = _fallback_discovery(reviews, insights, kpi_seeds)
-            normalized["discovery_barriers"] = fb["discovery_barriers"]
+            normalized["discovery_barriers"] = fallback["discovery_barriers"]
         rca = normalized.get("root_cause_analysis") or {}
         if not rca.get("causes") or len(rca.get("pm_insights") or []) < 5 or not rca.get(
             "summary"
         ):
-            fb = _fallback_discovery(reviews, insights, kpi_seeds)
-            fb_rca = fb["root_cause_analysis"]
+            fb_rca = fallback["root_cause_analysis"]
             if not rca.get("causes"):
                 rca["causes"] = fb_rca["causes"]
             if not rca.get("summary"):
@@ -870,13 +920,31 @@ def generate_gemini_discovery(
             if len(rca.get("pm_insights") or []) < 5:
                 rca["pm_insights"] = fb_rca["pm_insights"]
             normalized["root_cause_analysis"] = rca
+        if not _discovery_payload_is_valid(normalized):
+            _save_discovery_disk_cache(cache_key, fallback)
+            return fallback
         _save_discovery_disk_cache(cache_key, normalized)
         return normalized
+    except FuturesTimeout:
+        logger.warning(
+            "Gemini discovery timed out after %ss — using evidence fallback",
+            GEMINI_DISCOVERY_TIMEOUT_SEC,
+        )
+        fallback = {**fallback, "source": "fallback-timeout"}
+        _save_discovery_disk_cache(cache_key, fallback)
+        return fallback
     except Exception as exc:
-        logger.warning("Gemini discovery dashboard failed: %s", exc)
-        result = _fallback_discovery(reviews, insights, kpi_seeds)
-        _save_discovery_disk_cache(cache_key, result)
-        return result
+        if _is_auth_error(exc):
+            logger.warning(
+                "Gemini auth/config error — using evidence fallback. "
+                "Set a valid GEMINI_API_KEY in .env or Streamlit Secrets."
+            )
+            fallback = {**fallback, "source": "fallback-auth"}
+        else:
+            logger.warning("Gemini discovery dashboard failed: %s", exc)
+            fallback = {**fallback, "source": "fallback-error"}
+        _save_discovery_disk_cache(cache_key, fallback)
+        return fallback
 
 
 def build_discovery_dashboard(
@@ -884,23 +952,90 @@ def build_discovery_dashboard(
     *,
     limit: int = 2000,
 ) -> dict[str, Any]:
-    """Full payload for the PM Discovery dashboard."""
+    """Full payload for the PM Discovery dashboard. Never raises to the UI layer."""
     from src.database import fetch_all_reviews
 
-    reviews = reviews if reviews is not None else fetch_all_reviews(limit=limit)
-    insights = get_pm_insights(limit=limit)
-    sentiment = compute_sentiment_analysis(reviews)
-    discovery = generate_gemini_discovery(reviews, insights)
-    validation = compute_insight_validation(
-        reviews,
-        insights,
-        ai_confidence=discovery.get("ai_confidence_score"),
-        theme_confidence=discovery.get("theme_confidence_score"),
-    )
-    live_meta = get_live_meta() or {}
-    stats = get_collection_stats()
+    try:
+        reviews = reviews if reviews is not None else fetch_all_reviews(limit=limit)
+    except Exception as exc:
+        logger.exception("fetch_all_reviews failed")
+        reviews = []
+        fetch_error = str(exc)
+    else:
+        fetch_error = ""
 
-    return {
+    try:
+        insights = get_pm_insights(limit=limit) if reviews else {
+            "analyzed_count": 0,
+            "total_reviews": 0,
+            "avg_rating": None,
+            "top_customer_problems": [],
+            "most_frequent_themes": [],
+            "shopping_habits": [],
+            "product_categories": [],
+            "root_causes": [],
+            "ai_summary": "",
+            "category_exploration_barriers": [],
+            "exploration_potential_segments": [],
+            "all_segments": [],
+            "recommended_product_opportunities": [],
+        }
+    except Exception as exc:
+        logger.exception("get_pm_insights failed")
+        insights = {
+            "analyzed_count": 0,
+            "total_reviews": len(reviews),
+            "avg_rating": None,
+            "top_customer_problems": [],
+            "most_frequent_themes": [],
+            "shopping_habits": [],
+            "product_categories": [],
+            "root_causes": [],
+            "ai_summary": f"Insights aggregation unavailable: {exc}",
+            "category_exploration_barriers": [],
+            "exploration_potential_segments": [],
+            "all_segments": [],
+            "recommended_product_opportunities": [],
+        }
+
+    sentiment = compute_sentiment_analysis(reviews)
+    try:
+        discovery = generate_gemini_discovery(reviews, insights)
+    except Exception as exc:
+        logger.exception("generate_gemini_discovery failed")
+        discovery = _fallback_discovery(
+            reviews, insights, compute_growth_kpi_seeds(reviews, insights)
+        )
+        discovery["source"] = f"fallback-error:{exc}"
+
+    try:
+        validation = compute_insight_validation(
+            reviews,
+            insights,
+            ai_confidence=discovery.get("ai_confidence_score"),
+            theme_confidence=discovery.get("theme_confidence_score"),
+        )
+    except Exception:
+        validation = {
+            "duplicates_removed": 0,
+            "total_reviews_analysed": insights.get("analyzed_count") or len(reviews),
+            "sources_analysed": [],
+            "ai_confidence_score": 0,
+            "theme_confidence_score": 0,
+            "last_analysis_timestamp": None,
+            "note": (
+                "AI-generated insights were validated through duplicate removal, "
+                "confidence scoring, and review consistency checks."
+            ),
+        }
+
+    live_meta = get_live_meta() or {}
+    try:
+        stats = get_collection_stats()
+    except Exception:
+        stats = {"by_source": {}, "total": len(reviews)}
+
+    payload = {
         "reviews": reviews,
         "insights": insights,
         "stats": stats,
@@ -928,3 +1063,6 @@ def build_discovery_dashboard(
             "Pain Points Tracked": len(insights.get("top_customer_problems") or []),
         },
     }
+    if fetch_error:
+        payload["load_warning"] = fetch_error
+    return payload

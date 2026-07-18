@@ -116,7 +116,9 @@ GEMINI_MODEL = "gemini-2.0-flash"
 | `APPSTORE_ENABLED` | No | `1` on / `0` off |
 | `LIVE_CACHE_TTL_HOURS` | No | Default `6` |
 
-Google Play and App Store need **no API keys**. Without Gemini, rule-based analysis still runs.
+Google Play and App Store need **no API keys**. Without Gemini (or if the key is invalid), the app still runs with evidence-based fallback analysis so dashboards never crash.
+
+Use a **Google AI Studio** Gemini API key (`GEMINI_API_KEY`). Keys that return `401 ACCESS_TOKEN_TYPE_unsupported` are not valid for this API.
 
 ---
 
