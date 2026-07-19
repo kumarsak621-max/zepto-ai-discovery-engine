@@ -85,8 +85,8 @@ def render_root_cause_analysis(
 
         if not rca_causes:
             st.info(
-                "Root cause analysis will appear after review analysis completes. "
-                "Click **▶ Run Review Analysis** in the sidebar, then refresh this page."
+                "Root cause analysis will appear after automatic review analysis completes. "
+                "Reload the app to retry collection, then refresh this page."
             )
             return
 
@@ -272,6 +272,6 @@ def render_root_cause_analysis(
     except Exception as exc:
         st.error(f"Root Cause Analysis section failed to render. Details: {exc}")
         st.info(
-            "Try **▶ Run Review Analysis** again, or clear caches and reload. "
+            "Reload the app to retry automatic collection, or clear caches and refresh. "
             "Other dashboard sections below may still work."
         )

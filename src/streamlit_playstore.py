@@ -1,4 +1,4 @@
-"""Shared Streamlit helpers for timestamps, progress bars, and sidebar controls."""
+"""Shared Streamlit helpers for timestamps, progress bars, and sidebar status."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def _set_progress(progress_bar: Any, pct: float, msg: str, status: Any) -> None:
 
 
 def render_sidebar_fetch_controls() -> None:
-    """Sidebar live review controls (delegates to streamlit_sources)."""
-    from src.streamlit_sources import render_sidebar_source_controls
+    """Sidebar live-data status (auto-collect runs via ensure_live_reviews_loaded)."""
+    from src.auto_bootstrap import render_auto_status_sidebar
 
-    render_sidebar_source_controls()
+    render_auto_status_sidebar()

@@ -425,9 +425,8 @@ def compute_insight_validation(
     stats = get_collection_stats()
     play = int(meta.get("playstore_count") or 0)
     app = int(meta.get("appstore_count") or 0)
-    manual = int(meta.get("manual_count") or 0)
     merged = int(meta.get("merged_count") or insights.get("total_reviews") or len(reviews))
-    raw_sum = play + app + manual
+    raw_sum = play + app
     duplicates = max(0, raw_sum - merged) if raw_sum else 0
 
     analyzed = int(insights.get("analyzed_count") or 0)
@@ -458,7 +457,6 @@ def compute_insight_validation(
             for n, c in (
                 ("Google Play", play),
                 ("Apple App Store", app),
-                ("Manual Upload", manual),
             )
             if c
         ]
@@ -1060,13 +1058,13 @@ def build_discovery_dashboard(
         "review_sources": {
             "Google Play Reviews": int(live_meta.get("playstore_count") or 0),
             "Apple App Store Reviews": int(live_meta.get("appstore_count") or 0),
-            "Manual Uploaded Reviews": int(live_meta.get("manual_count") or 0),
             "Merged Reviews": int(
                 live_meta.get("merged_count") or insights.get("total_reviews") or len(reviews)
             ),
             **{
                 str(k).replace("_", " ").title(): int(v)
                 for k, v in (stats.get("by_source") or {}).items()
+                if str(k).lower() != "manual"
             },
         },
         "review_kpis": {

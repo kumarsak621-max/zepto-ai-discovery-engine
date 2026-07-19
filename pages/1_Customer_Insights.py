@@ -14,6 +14,11 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.auto_bootstrap import (
+    ensure_live_reviews_loaded,
+    render_auto_collect_warning,
+    render_auto_status_sidebar,
+)
 from src.database import init_db
 from src.gemini_status_ui import (
     render_gemini_all_keys_failed_warning,
@@ -22,11 +27,7 @@ from src.gemini_status_ui import (
 from src.insights_ui import render_root_cause_analysis
 from src.paths import ensure_runtime_dirs
 from src.streamlit_cache import cached_discovery_dashboard, clear_data_caches
-from src.streamlit_playstore import (
-    format_last_updated,
-    render_last_updated_caption,
-    render_sidebar_fetch_controls,
-)
+from src.streamlit_playstore import render_last_updated_caption
 
 st.set_page_config(page_title="Customer Insights", page_icon="💡", layout="wide")
 
@@ -100,15 +101,17 @@ except Exception as exc:
     st.stop()
 
 try:
-    render_sidebar_fetch_controls()
+    ensure_live_reviews_loaded()
+    render_auto_status_sidebar()
 except Exception as exc:
-    st.sidebar.warning(f"Sidebar controls unavailable: {exc}")
+    st.sidebar.warning(f"Live data status unavailable: {exc}")
 
 st.title("💡 Customer Insights")
 st.caption(
     "AI Discovery Engine for Zepto PMs — sentiment, habits, segments, discovery barriers, "
-    "category opportunities, and growth recommendations from live + uploaded reviews."
+    "category opportunities, and growth recommendations from live store reviews."
 )
+render_auto_collect_warning()
 try:
     render_last_updated_caption()
 except Exception:
@@ -122,8 +125,8 @@ try:
 except Exception as exc:
     st.error(f"Could not load insights. Details: {exc}")
     st.warning(
-        "Try **▶ Run Review Analysis** in the sidebar, then reload this page. "
-        "If Gemini is unavailable, the app still shows evidence-based fallback insights."
+        "Unable to fetch latest reviews. Displaying the most recently analyzed dataset "
+        "when available. If Gemini is unavailable, evidence-based fallback insights are shown."
     )
     st.stop()
 
@@ -137,8 +140,9 @@ review_kpis = dash.get("review_kpis") or {}
 
 if not isinstance(reviews, list) or not reviews:
     st.warning(
-        "No reviews available yet. Use **▶ Run Review Analysis** or "
-        "**🔄 Refresh Live Reviews** in the sidebar to collect and analyze reviews."
+        "Unable to fetch latest reviews. Displaying the most recently analyzed dataset "
+        "when available. Reload the app to retry automatic collection from Google Play "
+        "and the App Store."
     )
     st.stop()
 
@@ -169,7 +173,7 @@ if analyzed_count <= 0:
     st.info(
         "Reviews are loaded, but advanced AI analysis fields are still empty. "
         "Click **↻ Re-run advanced analysis on pending reviews** at the bottom, "
-        "or run **▶ Run Review Analysis** in the sidebar."
+        "or reload the app to retry automatic collection and analysis."
     )
 
 
@@ -182,10 +186,9 @@ def _section_sources() -> None:
     src_keys = [
         "Google Play Reviews",
         "Apple App Store Reviews",
-        "Manual Uploaded Reviews",
         "Merged Reviews",
     ]
-    cols = st.columns(4)
+    cols = st.columns(3)
     for i, key in enumerate(src_keys):
         try:
             cols[i].metric(key, f"{int(review_sources.get(key, 0) or 0):,}")

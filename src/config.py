@@ -137,7 +137,7 @@ LIVE_CACHE_TTL_HOURS = _env_int("LIVE_CACHE_TTL_HOURS", 6)
 REVIEWS_CSV_PATH = DATA_DIR / "reviews.csv"
 LIVE_META_PATH = DATA_DIR / "live_reviews_meta.json"
 
-LIVE_CHAT_SOURCES = ("playstore", "appstore", "manual")
+LIVE_CHAT_SOURCES = ("playstore", "appstore")
 
 THEME_TAXONOMY = [
     "Product discovery issue",

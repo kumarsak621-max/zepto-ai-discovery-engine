@@ -1,4 +1,4 @@
-"""Page 3 — AI Product Manager Chatbot"""
+"""Page — AI Product Manager Chatbot"""
 
 from __future__ import annotations
 
@@ -11,12 +11,17 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.auto_bootstrap import (
+    ensure_live_reviews_loaded,
+    render_auto_collect_warning,
+    render_auto_status_sidebar,
+)
 from src.chatbot import EXAMPLE_QUESTIONS, SYSTEM_INTRO, ask_product_manager
 from src.database import init_db
 from src.gemini_status_ui import render_gemini_key_caption
 from src.paths import ensure_runtime_dirs
 from src.streamlit_cache import cached_vector_stats
-from src.streamlit_playstore import render_last_updated_caption, render_sidebar_fetch_controls
+from src.streamlit_playstore import render_last_updated_caption
 
 st.set_page_config(page_title="AI Product Manager Chatbot", page_icon="🤖", layout="wide")
 
@@ -27,14 +32,16 @@ except Exception as exc:
     st.error(f"Could not initialize storage. Details: {exc}")
     st.stop()
 
-render_sidebar_fetch_controls()
+ensure_live_reviews_loaded()
+render_auto_status_sidebar()
 
 st.title("🤖 AI Product Manager Chatbot")
 st.caption(
     "Ask research questions. The assistant retrieves the latest analyzed reviews "
-    "(Google Play, App Store, and manual uploads), then Gemini synthesizes insight, "
+    "(Google Play and App Store), then Gemini synthesizes insight, "
     "evidence, root cause, and product opportunity."
 )
+render_auto_collect_warning()
 render_last_updated_caption()
 render_gemini_key_caption()
 
@@ -46,7 +53,7 @@ except Exception:
 st.info(
     f"{SYSTEM_INTRO}  ·  Knowledge base: **{vs.get('count', 0)}** reviews in `feedback.db` "
     f"({vs.get('analyzed', 0)} analyzed). "
-    "Ask about latest/live reviews, or click **🔄 Refresh Live Reviews** to download fresh data."
+    "Reviews are collected automatically on startup from Google Play and the App Store."
 )
 
 if "pm_messages" not in st.session_state:
@@ -118,14 +125,13 @@ if prompt:
             if "All Gemini API keys failed" in msg or "quota" in msg.lower():
                 friendly = (
                     "Gemini is temporarily unavailable after trying every configured API key. "
-                    "Please retry shortly, or refresh live reviews and ask again. "
-                    "Your conversation and dashboards stay available."
+                    "Please retry shortly. Your conversation and dashboards stay available."
                 )
             else:
                 friendly = (
                     "The chatbot could not answer right now. "
-                    "Check that reviews are loaded and GEMINI_API_KEY "
-                    "(or GEMINI_API_KEY_1…_10) is set in Streamlit Secrets / `.env`."
+                    "Reviews are loaded automatically on startup — reload the app if the "
+                    "knowledge base looks empty, and confirm Gemini keys in Secrets / `.env`."
                 )
             st.error(friendly)
             st.caption(f"Technical detail: {msg[:240]}")
@@ -136,4 +142,3 @@ if prompt:
 if st.button("Clear conversation"):
     st.session_state.pm_messages = []
     st.rerun()
-

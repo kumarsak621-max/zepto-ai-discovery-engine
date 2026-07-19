@@ -1,7 +1,7 @@
 """
 End-to-end data ingestion pipeline:
 
-Collect online sources + optional manual upload → Clean → Deduplicate → Gemini → Store
+Collect Google Play + App Store → Clean → Deduplicate → Gemini → Store
 """
 
 from __future__ import annotations
@@ -32,7 +32,6 @@ from src.database import (
     update_analysis,
 )
 from src.gemini_analysis import analyze_review
-from src.manual_reviews import load_manual_reviews
 from src.paths import DATA_DIR, ensure_runtime_dirs
 from src.playstore_scraper import (
     cache_is_fresh,
@@ -263,18 +262,18 @@ def run_live_review_analysis(
     progress_callback: Any | None = None,
 ) -> dict[str, Any]:
     """
-    Collect Google Play + App Store + optional manual uploads, merge, dedupe,
-    run Gemini analysis, and refresh the local knowledge base.
+    Collect Google Play + App Store reviews, merge, dedupe, run Gemini analysis,
+    and refresh the local knowledge base.
 
     Failover: each source failure is non-fatal. Analysis proceeds with whatever
-    sources succeed. Only fails when zero reviews are available from all sources.
+    sources succeed. Only fails when zero reviews are available from live sources.
     """
     init_db()
     run_id = start_pipeline_run()
     counts: dict[str, int] = {
         "playstore_count": 0,
         "appstore_count": 0,
-        "manual_count": 0,
+        "manual_count": 0,  # retained for DB schema compatibility; always 0
         "twitter_count": 0,
         "merged_count": 0,
         "new_reviews": 0,
@@ -336,45 +335,31 @@ def run_live_review_analysis(
         else:
             source_messages.append("App Store is not configured.")
 
-        # --- Step 3: Manual upload (if present) ---
-        _progress(0.55, "Loading manual uploaded reviews…")
-        try:
-            manual = load_manual_reviews()
-            counts["manual_count"] = len(manual)
-            if manual:
-                collected.extend(manual)
-                source_messages.append(f"Manual upload: {len(manual)} reviews loaded.")
-            else:
-                source_messages.append(
-                    "No manual review file uploaded — using live sources only."
-                )
-        except Exception as exc:
-            logger.exception("Manual review load failed")
-            source_messages.append(f"Manual upload unavailable: {exc}")
+        counts["manual_count"] = 0
 
-        # --- Failover: never crash if at least one source has data ---
+        # --- Failover: never crash if at least one live source has data ---
         if not collected:
             raise RuntimeError(
-                "No reviews available from Google Play, App Store, or manual upload. "
+                "No reviews available from Google Play or App Store. "
                 + " ".join(source_messages)
             )
 
-        # --- Steps 4–6: Merge + dedupe ---
-        _progress(0.70, "Merging sources and removing duplicates…")
+        # --- Steps 3–5: Merge + dedupe + store ---
+        _progress(0.60, "Merging sources and removing duplicates…")
         merged = merge_and_dedupe_reviews(collected)
         counts["merged_count"] = len(merged)
         merged_path = save_merged_reviews_csv(merged)
 
-        _progress(0.82, "Saving merged reviews to feedback.db…")
+        _progress(0.75, "Saving merged reviews to feedback.db…")
         inserted = bulk_upsert(merged)
         counts["new_reviews"] = inserted
 
-        # --- Step 7: Gemini ---
-        _progress(0.90, "Running Gemini analysis on merged dataset…")
+        # --- Step 6: Gemini ---
+        _progress(0.88, "Running Gemini analysis on merged dataset…")
         analyzed = run_analysis(batch_size=max(analyze_limit, len(merged) or 1))
         counts["analyzed_count"] = analyzed
 
-        # --- Step 8: Refresh meta for dashboards / chatbot ---
+        # --- Step 7: Refresh meta for dashboards / chatbot ---
         live_meta = save_live_meta(counts, forced=force_refresh)
         _progress(1.0, "Done")
         finish_pipeline_run(run_id, status="success", counts=counts)

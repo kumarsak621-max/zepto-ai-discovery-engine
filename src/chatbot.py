@@ -133,8 +133,8 @@ def _summarize_latest_reviews(n: int = 10) -> dict[str, Any]:
         return {
             "answer": (
                 "Live review data is missing or outdated. "
-                "Please click **🔄 Refresh Live Reviews** to download the latest reviews, "
-                "then ask again."
+                "Reload the app to automatically collect the latest Google Play and "
+                "App Store reviews, then ask again."
             ),
             "evidence": [],
             "retrieved": 0,
@@ -156,7 +156,8 @@ def _summarize_latest_reviews(n: int = 10) -> dict[str, Any]:
         return {
             "answer": (
                 "No fetched reviews are available in the local database yet. "
-                "Please click **🔄 Refresh Live Reviews** to download the latest reviews."
+                "Reload the app to automatically collect reviews from Google Play "
+                "and the App Store."
             ),
             "evidence": [],
             "retrieved": 0,
@@ -227,7 +228,8 @@ def ask_product_manager(
         return {
             "answer": (
                 "No live review data is available yet. "
-                "Please click **🔄 Refresh Live Reviews** to download the latest reviews."
+                "Reload the app to automatically collect reviews from Google Play "
+                "and the App Store."
             ),
             "evidence": [],
             "retrieved": 0,
@@ -260,8 +262,7 @@ def ask_product_manager(
         return {
             "answer": (
                 "I couldn't find matching reviews in the local fetched dataset. "
-                "Please click **🔄 Refresh Live Reviews** to download the latest reviews, "
-                "or try a different question."
+                "Reload the app to refresh automatic collection, or try a different question."
             ),
             "evidence": [],
             "retrieved": 0,

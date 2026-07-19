@@ -25,9 +25,13 @@ except ImportError:
 
 import streamlit as st
 
+from src.auto_bootstrap import (
+    ensure_live_reviews_loaded,
+    render_auto_collect_warning,
+    render_auto_status_sidebar,
+)
 from src.paths import ensure_runtime_dirs
 from src.streamlit_cache import cached_collection_stats, cached_pm_insights
-from src.streamlit_playstore import render_sidebar_fetch_controls
 
 st.set_page_config(
     page_title="Zepto AI Discovery Engine",
@@ -47,6 +51,10 @@ except Exception as exc:
         f"Please retry in a moment. Details: {exc}"
     )
     st.stop()
+
+# Automatic Play Store + App Store collection + Gemini analysis (once per session)
+ensure_live_reviews_loaded()
+render_auto_status_sidebar()
 
 st.markdown(
     """
@@ -93,8 +101,6 @@ h1, h2, h3 {
     unsafe_allow_html=True,
 )
 
-render_sidebar_fetch_controls()
-
 st.markdown(
     """
 <div class="hero">
@@ -104,6 +110,8 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
+render_auto_collect_warning()
 
 st.markdown("The platform automatically:")
 st.markdown(
