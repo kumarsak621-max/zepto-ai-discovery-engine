@@ -709,7 +709,7 @@ st.info(
 )
 try:
     st.page_link(
-        "pages/3_AI_Product_Manager_Chatbot.py",
+        "pages/2_AI_Product_Manager_Chatbot.py",
         label="Open AI Product Manager Chatbot",
         icon="🤖",
     )

@@ -25,13 +25,9 @@ except ImportError:
 
 import streamlit as st
 
-from src.config import has_appstore, has_gemini, validate_runtime_config
-from src.data_pipeline import get_live_meta
-from src.gemini_status_ui import render_gemini_api_status, render_gemini_key_caption
 from src.paths import ensure_runtime_dirs
-from src.streamlit_cache import cached_collection_stats, cached_vector_stats
+from src.streamlit_cache import cached_collection_stats, cached_pm_insights
 from src.streamlit_playstore import render_sidebar_fetch_controls
-from src.streamlit_sources import render_live_review_controls, show_source_metrics
 
 st.set_page_config(
     page_title="Zepto AI Discovery Engine",
@@ -51,8 +47,6 @@ except Exception as exc:
         f"Please retry in a moment. Details: {exc}"
     )
     st.stop()
-
-_config_warnings = validate_runtime_config()
 
 st.markdown(
     """
@@ -84,15 +78,12 @@ h1, h2, h3 {
 }
 .hero h1 { color: #F1FAEE !important; margin: 0 0 0.4rem 0; font-size: 2.1rem; }
 .hero p { color: #B7E4C7; margin: 0; font-size: 1.05rem; }
-.status-pill {
-  display: inline-block;
-  padding: 0.25rem 0.7rem;
-  border-radius: 999px;
-  font-size: 0.8rem;
-  font-weight: 600;
+.platform-list {
+  margin: 0.5rem 0 1.5rem 0;
+  padding-left: 1.2rem;
+  color: #1B4332;
+  line-height: 1.7;
 }
-.ok { background: #D8F3DC; color: #1B4332; }
-.warn { background: #FFF3CD; color: #856404; }
 @media (max-width: 768px) {
   .hero { padding: 1.4rem 1.1rem; }
   .hero h1 { font-size: 1.55rem !important; }
@@ -102,100 +93,52 @@ h1, h2, h3 {
     unsafe_allow_html=True,
 )
 
+render_sidebar_fetch_controls()
+
 st.markdown(
     """
 <div class="hero">
   <h1>Zepto AI Discovery Engine</h1>
-  <p>AI-powered customer intelligence for Product Managers — automatically collect, analyze, and act on live reviews.</p>
+  <p>AI-powered customer feedback analysis platform for Product Managers.</p>
 </div>
 """,
     unsafe_allow_html=True,
 )
 
-for warning in _config_warnings:
-    st.warning(warning)
-
-render_sidebar_fetch_controls()
+st.markdown("The platform automatically:")
+st.markdown(
+    """
+<div class="platform-list">
+  <ul>
+    <li>Collects customer reviews</li>
+    <li>Performs AI sentiment analysis</li>
+    <li>Detects customer pain points</li>
+    <li>Identifies shopping habits</li>
+    <li>Segments users</li>
+    <li>Discovers product opportunities</li>
+    <li>Generates actionable PM recommendations</li>
+  </ul>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
 try:
     stats = cached_collection_stats()
-    vs = cached_vector_stats()
+    insights = cached_pm_insights(limit=2000)
 except Exception as exc:
     st.error(f"Could not load dashboard metrics right now. Details: {exc}")
-    stats, vs = {"total": 0, "by_source": {}, "avg_rating": None}, {"count": 0}
+    stats, insights = {"total": 0, "by_sentiment": {}}, {}
 
-live_meta = get_live_meta()
-st.subheader("Source metrics")
-show_source_metrics(live_meta)
+by_sentiment = stats.get("by_sentiment") or {}
+positive = int(by_sentiment.get("Positive") or 0)
+pain_points = len(insights.get("top_customer_problems") or [])
+growth_opps = len(insights.get("recommended_product_opportunities") or [])
+if growth_opps == 0:
+    growth_opps = len(insights.get("most_frequent_themes") or [])
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total in DB", f"{stats.get('total', 0):,}")
-c2.metric(
-    "Average Rating",
-    f"{stats['avg_rating']:.2f}" if stats.get("avg_rating") is not None else "—",
-)
-c3.metric("Reviews in SQLite", f"{vs.get('count', 0):,}")
-c4.metric("Sources active", len(stats.get("by_source") or {}))
-
-st.subheader("System readiness")
-col_a, col_b, col_c = st.columns(3)
-with col_a:
-    st.markdown(
-        f'<span class="status-pill {"ok" if has_gemini() else "warn"}">'
-        f'{"Gemini connected" if has_gemini() else "Gemini API key missing"}</span>',
-        unsafe_allow_html=True,
-    )
-with col_b:
-    st.markdown(
-        '<span class="status-pill ok">Google Play ready</span>',
-        unsafe_allow_html=True,
-    )
-with col_c:
-    if has_appstore():
-        label, cls = "App Store ready", "ok"
-    else:
-        label, cls = "App Store off", "warn"
-    st.markdown(
-        f'<span class="status-pill {cls}">{label}</span>',
-        unsafe_allow_html=True,
-    )
-render_gemini_key_caption()
-
-st.markdown("---")
-render_gemini_api_status(expanded=False)
-
-st.markdown("---")
-st.markdown(
-    """
-### What this tool does for PMs
-
-1. **Collects** live Zepto reviews from Google Play and Apple App Store, plus optional manual CSV/Excel uploads
-2. **Merges & deduplicates** feedback into `feedback.db`
-3. **Analyzes** each item with Gemini for sentiment, theme, intent, and opportunities
-4. **Powers the PM chatbot** using fetched review evidence from SQLite
-
-Use the sidebar:
-
-- **📂 Upload Manual Reviews** — CSV / Excel
-- **Data Collection Status** — pipeline health & volume
-- **Customer Insights** — sentiment, habits, segments, barriers, category opportunities, growth KPIs
-- **AI Product Manager Chatbot** — ask research questions with evidence
-"""
-)
-
-render_live_review_controls(key_prefix="home")
-
-if stats.get("by_source"):
-    st.subheader("Reviews collected by source")
-    src_cols = st.columns(max(len(stats["by_source"]), 1))
-    for i, (source_name, source_count) in enumerate(stats["by_source"].items()):
-        src_cols[i % len(src_cols)].metric(
-            str(source_name).replace("_", " ").title(),
-            f"{source_count:,}",
-        )
-    st.bar_chart(stats["by_source"])
-else:
-    st.warning(
-        "No feedback collected yet. Click **▶ Run Review Analysis** or "
-        "**🔄 Refresh Live Reviews** to download online reviews automatically."
-    )
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("Total Reviews", f"{int(stats.get('total') or 0):,}")
+k2.metric("Positive Sentiment", f"{positive:,}")
+k3.metric("Pain Points", f"{pain_points:,}")
+k4.metric("Growth Opportunities", f"{growth_opps:,}")
