@@ -941,17 +941,16 @@ def generate_gemini_discovery(
         if "timed out" in msg or "timeout" in msg:
             logger.warning("Gemini discovery timed out — using evidence fallback")
             fallback = {**fallback, "source": "fallback-timeout"}
-        elif "all gemini api keys failed" in msg:
+        elif (
+            "all gemini api keys failed" in msg
+            or "after trying every configured key" in msg
+            or _is_auth_error(exc)
+        ):
+            # Key manager already exhausted every configured key before raising.
             logger.warning(
-                "All Gemini keys failed for discovery — using evidence fallback"
+                "Discovery using evidence fallback after all Gemini keys were tried"
             )
             fallback = {**fallback, "source": "fallback-all-keys"}
-        elif _is_auth_error(exc):
-            logger.warning(
-                "Gemini auth/config error — using evidence fallback. "
-                "Set valid GEMINI_API_KEY / GEMINI_API_KEY_1…_10 in .env or Secrets."
-            )
-            fallback = {**fallback, "source": "fallback-auth"}
         else:
             logger.warning("Gemini discovery dashboard failed: %s", exc)
             fallback = {**fallback, "source": "fallback-error"}

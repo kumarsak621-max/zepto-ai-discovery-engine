@@ -61,15 +61,11 @@ def render_gemini_key_caption() -> None:
 
 
 def render_gemini_all_keys_failed_warning(exc: BaseException | None = None) -> None:
-    """Friendly, non-fatal warning when every Gemini key fails."""
-    detail = ""
-    if exc is not None:
-        text = str(exc)
-        if "All Gemini API keys failed" in text or "quota" in text.lower():
-            detail = " All configured keys were tried with automatic failover."
+    """Single professional warning — only after every configured Gemini key failed."""
+    # Keep signature for callers; never surface technical exception text in the UI.
+    _ = exc
     st.warning(
-        "Gemini is temporarily unavailable. "
-        "The app continues with evidence-based fallbacks so your workflow is not interrupted."
-        f"{detail} "
-        "Check quotas in Google AI Studio or rotate keys in Secrets / `.env`."
+        "AI analysis is temporarily unavailable. "
+        "The dashboard is displaying the most recent successfully analyzed insights. "
+        "Please try again later."
     )

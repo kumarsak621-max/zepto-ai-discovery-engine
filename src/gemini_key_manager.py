@@ -19,9 +19,14 @@ logger = logging.getLogger(__name__)
 MAX_KEYS = 10
 DEFAULT_MAX_ATTEMPTS = 6
 DEFAULT_TIMEOUT_SEC = 45
-DEFAULT_BACKOFF_BASE_SEC = 1.0
-DEFAULT_BACKOFF_MAX_SEC = 16.0
+DEFAULT_BACKOFF_BASE_SEC = 0.5
+DEFAULT_BACKOFF_MAX_SEC = 8.0
 DEFAULT_CIRCUIT_COOLDOWN_SEC = 120.0
+
+# Raised / detected by UI layers — never includes raw provider payloads or key values.
+ALL_KEYS_EXHAUSTED_MSG = (
+    "All Gemini API keys failed after trying every configured key."
+)
 
 _RETRYABLE_TOKENS = (
     "429",
@@ -80,7 +85,6 @@ def _try_streamlit_secret(name: str) -> str | None:
         try:
             value = secrets.get(name)
         except Exception:
-            # Local runs without secrets.toml raise once; remember and skip later.
             _SECRETS_AVAILABLE = False
             return None
         _SECRETS_AVAILABLE = True
@@ -147,7 +151,6 @@ def _sanitize_error(err: str, *, limit: int = 300) -> str:
     import re
 
     text = (err or "").strip()
-    # Long token-like strings (API keys)
     text = re.sub(r"(?i)(api[_-]?key\s*[=:]\s*)\S+", r"\1[REDACTED]", text)
     text = re.sub(r"\bAIza[0-9A-Za-z_-]{20,}\b", "[REDACTED_KEY]", text)
     text = re.sub(r"\bAQ\.[A-Za-z0-9_-]{20,}\b", "[REDACTED_KEY]", text)
@@ -189,11 +192,16 @@ def load_gemini_api_keys() -> list[str]:
 
 
 def is_retryable_error(exc: BaseException) -> bool:
+    """True for quota / rate-limit / auth / timeout / temporary server errors."""
     text = str(exc).lower()
     if any(t in text for t in _AUTH_TOKENS):
-        # Auth failures on one key should failover to the next key
         return True
     return any(t in text for t in _RETRYABLE_TOKENS)
+
+
+def is_all_keys_exhausted_error(exc: BaseException | str | None) -> bool:
+    text = str(exc or "")
+    return ALL_KEYS_EXHAUSTED_MSG in text or "all gemini api keys failed" in text.lower()
 
 
 @dataclass
@@ -229,7 +237,7 @@ class KeyManagerStats:
 
 @dataclass
 class GeminiKeyManager:
-    """Thread-safe multi-key Gemini client with failover."""
+    """Thread-safe multi-key Gemini client with exhaustive failover."""
 
     keys: list[str] = field(default_factory=list)
     active_index: int = 0
@@ -283,7 +291,6 @@ class GeminiKeyManager:
             )
             self.stats.total_keys = len(self.keys)
             self.stats.active_index = self.active_index
-            # New keys added → allow Gemini again immediately
             if len(self.keys) != prev_count:
                 self._circuit_open_until = 0.0
             try:
@@ -327,32 +334,6 @@ class GeminiKeyManager:
                     self.stats.model_name = "gemini-2.0-flash"
             return self.stats.to_dict()
 
-    def _switch_to_next(self, reason: str) -> bool:
-        """Advance active key. Returns False if no other key exists."""
-        with self._lock:
-            if len(self.keys) <= 1:
-                return False
-            prev = self.active_index
-            self.active_index = (self.active_index + 1) % len(self.keys)
-            self.stats.failovers += 1
-            self.stats.active_index = self.active_index
-            self.stats.last_failover_at = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-            safe_reason = _sanitize_error(reason)
-            self.stats.last_error = safe_reason
-            logger.warning(
-                "Gemini failover: Key %s → Key %s of %s | total_keys=%s "
-                "success=%s failed=%s failovers=%s | %s",
-                prev + 1,
-                self.active_index + 1,
-                len(self.keys),
-                len(self.keys),
-                self.stats.successful_requests,
-                self.stats.failed_requests,
-                self.stats.failovers,
-                safe_reason[:160],
-            )
-            return True
-
     def _build_model(self, api_key: str, model_name: str):
         import google.generativeai as genai
 
@@ -367,14 +348,15 @@ class GeminiKeyManager:
         on_key_used: Callable[[str], None] | None = None,
     ) -> str:
         """
-        Generate content with automatic key failover + exponential backoff.
+        Generate content, trying every configured API key before failing.
 
-        Returns response text. Raises RuntimeError if all keys fail.
+        - Starts at the active key, then rotates through all remaining keys.
+        - Never surfaces a user warning from this layer (callers decide after exhaustion).
+        - Returns response text on first success.
+        - Raises RuntimeError(ALL_KEYS_EXHAUSTED_MSG) only after every key was tried.
         """
         from src.config import get_gemini_model
 
-        # Reload from env only when empty (allows tests / runtime injection).
-        # Call get_key_manager() / has_gemini() to pick up newly added secrets.
         if not self.keys:
             self.reload()
         if not self.keys:
@@ -385,33 +367,38 @@ class GeminiKeyManager:
 
         with self._lock:
             if self._circuit_open_until and time.time() < self._circuit_open_until:
-                remaining = int(self._circuit_open_until - time.time())
-                raise RuntimeError(
-                    "All Gemini API keys failed recently. "
-                    f"Using fallbacks for ~{max(remaining, 1)}s to keep the app responsive. "
-                    f"Last error: {self.stats.last_error or 'unavailable'}"
-                )
+                # Recent full exhaustion — skip network hammering; callers use fallbacks.
+                raise RuntimeError(ALL_KEYS_EXHAUSTED_MSG)
 
         model_name = (model_name or get_gemini_model()).strip() or "gemini-2.0-flash"
         with self._lock:
             self.stats.model_name = model_name
-        last_error: Exception | None = None
-        attempts = max(1, min(self.max_attempts, max(len(self.keys) * 2, 2)))
+            n_keys = len(self.keys)
+            start = self.active_index % n_keys
 
-        for attempt in range(attempts):
+        # Exactly one pass through every configured key (no early abort, no duplicate pass).
+        order = [(start + offset) % n_keys for offset in range(n_keys)]
+
+        last_error: Exception | None = None
+        tried_unique: set[int] = set()
+
+        for retry_count, idx in enumerate(order, start=1):
             with self._lock:
-                idx = self.active_index
                 key = self.keys[idx]
                 n_keys = len(self.keys)
-                label = f"Key {idx + 1} of {n_keys}"
+            key_number = idx + 1
+            label = f"Key {key_number} of {n_keys}"
+            tried_unique.add(idx)
 
             logger.info(
-                "Gemini attempt %s/%s using %s (model=%s, total_keys=%s)",
-                attempt + 1,
-                attempts,
+                "Gemini request: attempting key_index=%s (%s) retry_count=%s "
+                "model=%s total_keys=%s unused_keys_remaining=%s",
+                key_number,
                 label,
+                retry_count,
                 model_name,
                 n_keys,
+                max(0, n_keys - len(tried_unique)),
             )
 
             if on_key_used:
@@ -423,60 +410,83 @@ class GeminiKeyManager:
             try:
                 text = self._generate_once(key, model_name, prompt)
                 with self._lock:
+                    self.active_index = idx
+                    self.stats.active_index = idx
                     self.stats.successful_requests += 1
                     self.stats.last_success_at = time.strftime(
                         "%Y-%m-%d %H:%M:%S UTC", time.gmtime()
                     )
-                    self.stats.active_index = idx
                     self.stats.model_name = model_name
                     self._circuit_open_until = 0.0
                 logger.info(
-                    "Gemini success with %s | success=%s failed=%s failovers=%s",
-                    label,
-                    self.stats.successful_requests,
-                    self.stats.failed_requests,
+                    "Gemini request succeeded: successful_key_index=%s "
+                    "retry_count=%s failovers=%s",
+                    key_number,
+                    retry_count,
                     self.stats.failovers,
                 )
                 return text
             except Exception as exc:
                 last_error = exc
-                err = _sanitize_error(str(exc))
+                reason = _sanitize_error(str(exc))
                 with self._lock:
                     self.stats.failed_requests += 1
-                    self.stats.last_error = err
+                    self.stats.last_error = reason
 
-                if not is_retryable_error(exc):
-                    logger.warning("Gemini non-standard error on %s: %s", label, err[:200])
-
-                switched = self._switch_to_next(err)
-                backoff = min(
-                    self.backoff_max_sec,
-                    self.backoff_base_sec * (2**attempt),
+                logger.warning(
+                    "Gemini key failed: key_index=%s failure_reason=%s "
+                    "retry_count=%s retryable=%s",
+                    key_number,
+                    reason[:200],
+                    retry_count,
+                    is_retryable_error(exc),
                 )
-                if attempt < attempts - 1:
+
+                # Advance sticky active key so the next request starts on a fresh key
+                next_idx = (idx + 1) % n_keys
+                with self._lock:
+                    if next_idx != self.active_index:
+                        self.stats.failovers += 1
+                        self.stats.last_failover_at = time.strftime(
+                            "%Y-%m-%d %H:%M:%S UTC", time.gmtime()
+                        )
+                    self.active_index = next_idx
+                    self.stats.active_index = next_idx
+
+                # Short backoff before trying the next key (never block on UI warnings)
+                if retry_count < len(order):
+                    backoff = min(
+                        self.backoff_max_sec,
+                        self.backoff_base_sec * (2 ** min(retry_count - 1, 4)),
+                    )
                     logger.info(
-                        "Retrying Gemini request (attempt %s/%s) after %.1fs; %s",
-                        attempt + 2,
-                        attempts,
+                        "Gemini rotating to next key after %.2fs "
+                        "(keys_tried=%s/%s)",
                         backoff,
-                        "switched key" if switched else "same/only key",
+                        len(tried_unique),
+                        n_keys,
                     )
                     time.sleep(backoff)
 
+        # All configured keys were attempted
         safe_last = _sanitize_error(str(last_error))
         with self._lock:
-            cooldown = max(15.0, float(self.circuit_cooldown_sec or DEFAULT_CIRCUIT_COOLDOWN_SEC))
+            cooldown = max(
+                15.0, float(self.circuit_cooldown_sec or DEFAULT_CIRCUIT_COOLDOWN_SEC)
+            )
             self._circuit_open_until = time.time() + cooldown
             self.stats.last_error = safe_last
+
         logger.error(
-            "All Gemini keys failed — opening circuit for %.0fs (fallbacks active)",
+            "Gemini exhausted all keys: keys_tried=%s total_keys=%s "
+            "retry_count=%s last_failure_reason=%s circuit_cooldown_sec=%.0f",
+            len(tried_unique),
+            n_keys,
+            len(order),
+            safe_last[:200],
             cooldown,
         )
-        raise RuntimeError(
-            "All Gemini API keys failed after retries. "
-            f"Last error: {safe_last}. "
-            "Check quotas / key validity in Google AI Studio."
-        )
+        raise RuntimeError(ALL_KEYS_EXHAUSTED_MSG)
 
     def _generate_once(self, api_key: str, model_name: str, prompt: str) -> str:
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout

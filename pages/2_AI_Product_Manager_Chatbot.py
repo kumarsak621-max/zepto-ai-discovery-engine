@@ -121,20 +121,21 @@ if prompt:
                 }
             )
         except Exception as exc:
-            msg = str(exc)
-            if "All Gemini API keys failed" in msg or "quota" in msg.lower():
+            from src.gemini_key_manager import is_all_keys_exhausted_error
+
+            if is_all_keys_exhausted_error(exc):
                 friendly = (
-                    "Gemini is temporarily unavailable after trying every configured API key. "
-                    "Please retry shortly. Your conversation and dashboards stay available."
+                    "AI analysis is temporarily unavailable. "
+                    "The dashboard is displaying the most recent successfully analyzed insights. "
+                    "Please try again later."
                 )
             else:
                 friendly = (
-                    "The chatbot could not answer right now. "
-                    "Reviews are loaded automatically on startup — reload the app if the "
-                    "knowledge base looks empty, and confirm Gemini keys in Secrets / `.env`."
+                    "AI analysis is temporarily unavailable. "
+                    "The dashboard is displaying the most recent successfully analyzed insights. "
+                    "Please try again later."
                 )
-            st.error(friendly)
-            st.caption(f"Technical detail: {msg[:240]}")
+            st.warning(friendly)
             st.session_state.pm_messages.append(
                 {"role": "assistant", "content": friendly, "evidence": []}
             )

@@ -402,19 +402,12 @@ Do not invent fake quotes that contradict the evidence.
         )
         roots = [_s(e.get("root_cause")) for e in evidence if _s(e.get("root_cause"))]
         root = roots[0] if roots else f"Emerging themes: {themes}."
-        err = str(exc)
-        if "All Gemini API keys failed" in err:
-            note = (
-                "Live Gemini synthesis unavailable after trying every configured API key. "
-                "Showing retrieval-based brief."
-            )
-        else:
-            note = "Live Gemini synthesis unavailable. Showing retrieval-based brief."
         return (
             f"### Customer Insight\n"
             f"Based on {len(evidence)} retrieved feedback items related to your question.\n\n"
             f"### Evidence\n{quotes}\n\n"
             f"### Root Cause\n{root}\n\n"
             f"### Product Opportunity\n{opportunity}\n\n"
-            f"_Note: {note}_"
+            f"_Note: AI analysis is temporarily unavailable. "
+            f"Showing the most recent successfully analyzed insights from retrieved reviews._"
         )

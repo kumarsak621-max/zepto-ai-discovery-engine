@@ -150,12 +150,8 @@ _discovery_source = str((dash.get("discovery") or {}).get("source") or "")
 if _discovery_source.startswith("fallback-all-keys") or _discovery_source.startswith(
     "fallback-auth"
 ):
+    # Shown only after the key manager exhausted every configured Gemini key.
     render_gemini_all_keys_failed_warning()
-elif _discovery_source.startswith("fallback"):
-    st.info(
-        "Showing evidence-based insights while Gemini is unavailable. "
-        "Dashboards remain fully usable."
-    )
 
 try:
     df = pd.DataFrame(reviews)
