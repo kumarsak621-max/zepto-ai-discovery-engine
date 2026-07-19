@@ -580,25 +580,147 @@ _safe_section("Growth Opportunity KPIs", _section_growth_kpis)
 
 
 # =============================================================================
-# 12. AI Recommendations for Growth Team
+# 12. Product Manager Insights
 # =============================================================================
+def _pm_insight_cards(discovery_payload: dict[str, Any]) -> list[dict[str, str]]:
+    """
+    Reshape existing Gemini discovery fields into PM-facing cards.
+    UI-only — does not call Gemini or change analysis logic.
+    """
+    cards: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def _add(insight: str, impact: str, action: str) -> None:
+        insight = (insight or "").strip()
+        impact = (impact or "").strip()
+        action = (action or "").strip()
+        if not insight or not action:
+            return
+        if not impact:
+            impact = (
+                "This matters for product experience and growth — unresolved friction "
+                "keeps shoppers in familiar categories and limits basket expansion."
+            )
+        key = f"{insight[:90].lower()}|{action[:60].lower()}"
+        if key in seen:
+            return
+        seen.add(key)
+        cards.append({"insight": insight, "impact": impact, "action": action})
+
+    rca = discovery_payload.get("root_cause_analysis") or {}
+    if not isinstance(rca, dict):
+        rca = {}
+
+    for cause in _as_records(rca.get("causes")):
+        title = str(cause.get("root_cause") or "").strip()
+        detail = str(cause.get("description") or "").strip()
+        if title and detail:
+            insight = detail if title.lower() in detail.lower() else f"{title}. {detail}"
+        else:
+            insight = detail or title
+        biz = str(cause.get("business_impact") or "").strip().title()
+        if biz in {"High", "Medium", "Low"}:
+            impact = (
+                f"{biz} business impact — this root cause influences whether customers "
+                "stay in repeat-purchase loops or explore new categories."
+            )
+        else:
+            impact = str(cause.get("business_impact") or "").strip()
+        action = str(
+            cause.get("suggested_solution")
+            or cause.get("suggested_product_opportunity")
+            or ""
+        ).strip()
+        _add(insight, impact, action)
+        if len(cards) >= 6:
+            return cards[:6]
+
+    opps = _as_records(discovery_payload.get("category_exploration_opportunities"))
+    habits = _as_str_list(discovery_payload.get("shopping_habit_insights"))
+    barriers = _as_records(discovery_payload.get("discovery_barriers"))
+    recs = _as_str_list(discovery_payload.get("growth_recommendations"))
+    pm_lines = _as_str_list(rca.get("pm_insights"))
+
+    for i, rec in enumerate(recs):
+        if len(cards) >= 6:
+            break
+        if i < len(opps):
+            o = opps[i]
+            insight = (
+                f"Shoppers in {o.get('current_category', 'core categories')} show "
+                f"room to explore {o.get('suggested_new_category', 'adjacent categories')}. "
+                f"{o.get('reason') or ''}"
+            ).strip()
+        elif i < len(habits):
+            insight = habits[i]
+        elif i < len(pm_lines):
+            insight = pm_lines[i]
+        elif i < len(barriers):
+            b = barriers[i]
+            insight = (
+                f"{b.get('barrier') or 'Discovery barrier'}: "
+                f"{b.get('representative_review') or 'Observed repeatedly in customer feedback.'}"
+            )
+        else:
+            insight = f"Customer feedback highlights a product opportunity: {rec}"
+
+        if i < len(barriers):
+            sev = str(barriers[i].get("severity") or "").strip().title()
+            impact = (
+                f"{sev + ' severity — ' if sev else ''}"
+                "Discovery friction and habit-driven shopping reduce cross-category "
+                "adoption and customer lifetime value."
+            )
+        else:
+            impact = (
+                "Low cross-category adoption and weak discovery reduce basket expansion "
+                "and long-term customer value."
+            )
+        _add(insight, impact, rec)
+
+    for line in pm_lines:
+        if len(cards) >= 6:
+            break
+        # Use remaining recommendations as actions when available
+        action = recs[len(cards) % len(recs)] if recs else (
+            "Validate with a focused discovery experiment and measure category attach rate."
+        )
+        _add(line, "", action)
+
+    return cards[:6]
+
+
 def _section_recs() -> None:
     st.markdown("---")
-    st.header("AI Recommendations for Growth Team")
-    st.caption("Actionable recommendations generated dynamically from review insights.")
-    recs = _as_str_list(discovery.get("growth_recommendations"))
-    if not recs:
-        st.info("Growth recommendations appear after Gemini discovery analysis.")
-        return
-    for i, rec in enumerate(recs, 1):
+    st.header("📊 Product Manager Insights")
+    st.caption(
+        "Actionable Product Manager insights derived from the existing Gemini-analyzed "
+        "review set (root causes, discovery barriers, and growth recommendations)."
+    )
+    cards = _pm_insight_cards(discovery if isinstance(discovery, dict) else {})
+    if len(cards) < 4:
+        # Still show whatever we have; empty → info
+        if not cards:
+            st.info("Product Manager insights appear after discovery analysis completes.")
+            return
+    for card in cards:
         try:
             with st.container(border=True):
-                st.markdown(f"**{i}.** {rec}")
+                st.markdown("📌 **Insight**")
+                st.write(card["insight"])
+                st.markdown("🎯 **Impact**")
+                st.write(card["impact"])
+                st.markdown("💡 **Recommended PM Action**")
+                st.write(card["action"])
         except TypeError:
-            st.markdown(f"**{i}.** {rec}")
+            st.markdown(
+                f"📌 **Insight**  \n{card['insight']}  \n\n"
+                f"🎯 **Impact**  \n{card['impact']}  \n\n"
+                f"💡 **Recommended PM Action**  \n{card['action']}"
+            )
 
 
-_safe_section("AI Recommendations for Growth Team", _section_recs)
+_safe_section("Product Manager Insights", _section_recs)
 
 
 # =============================================================================
