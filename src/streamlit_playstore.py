@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import streamlit as st
@@ -9,14 +10,84 @@ import streamlit as st
 from src.data_pipeline import get_live_meta
 
 
-def format_last_updated(ts: str | None = None) -> str:
-    value = ts
-    if not value:
-        meta = get_live_meta()
-        value = meta.get("last_updated")
-    if not value:
-        return "Never"
-    return str(value).replace("T", " ")[:19] + " UTC"
+def format_last_updated(ts: Any = None) -> str:
+    """
+    Format a last-updated timestamp for UI captions.
+
+    Accepts datetime, ISO strings, Unix timestamps (int/float), or None.
+    Returns "Unknown" when missing/invalid. Never raises.
+    Example: 19 Jul 2026, 02:48 PM
+    """
+    try:
+        value = ts
+        # No argument / None → fall back to latest live-meta timestamp
+        if value is None or value == "":
+            try:
+                value = (get_live_meta() or {}).get("last_updated")
+            except Exception:
+                value = None
+
+        if value is None or value == "":
+            return "Unknown"
+
+        dt: datetime | None = None
+
+        if isinstance(value, datetime):
+            dt = value
+        elif isinstance(value, (int, float)):
+            try:
+                # Heuristic: ms vs seconds
+                epoch = float(value)
+                if epoch > 1e12:
+                    epoch /= 1000.0
+                dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
+            except (OverflowError, OSError, ValueError):
+                return "Unknown"
+        elif isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return "Unknown"
+            # Numeric string → treat as unix
+            try:
+                if text.replace(".", "", 1).isdigit():
+                    epoch = float(text)
+                    if epoch > 1e12:
+                        epoch /= 1000.0
+                    dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
+            except (OverflowError, OSError, ValueError):
+                dt = None
+            if dt is None:
+                raw = text.replace("Z", "+00:00")
+                try:
+                    dt = datetime.fromisoformat(raw)
+                except ValueError:
+                    for fmt in (
+                        "%Y-%m-%d %H:%M:%S",
+                        "%Y-%m-%d %H:%M",
+                        "%Y-%m-%dT%H:%M:%S",
+                        "%Y-%m-%d",
+                    ):
+                        try:
+                            dt = datetime.strptime(text[:19].replace("T", " "), fmt)
+                            break
+                        except ValueError:
+                            continue
+        else:
+            return "Unknown"
+
+        if dt is None:
+            return "Unknown"
+
+        # Display in local-naive wall time if timezone-aware
+        if dt.tzinfo is not None:
+            try:
+                dt = dt.astimezone()
+            except Exception:
+                dt = dt.replace(tzinfo=None)
+
+        return dt.strftime("%d %b %Y, %I:%M %p")
+    except Exception:
+        return "Unknown"
 
 
 def render_last_updated_caption(*, sidebar: bool = False) -> None:

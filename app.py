@@ -9,7 +9,9 @@ Streamlit Community Cloud entry point:
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
@@ -23,41 +25,109 @@ try:
 except ImportError:
     pass
 
+import pandas as pd
 import streamlit as st
 
-from src.auto_bootstrap import (
-    ensure_live_reviews_loaded,
-    render_auto_collect_warning,
-    render_auto_status_sidebar,
-)
-from src.paths import ensure_runtime_dirs
-from src.streamlit_cache import cached_collection_stats, cached_pm_insights
-
 st.set_page_config(
-    page_title="Zepto AI Discovery Engine",
-    page_icon="⚡",
+    page_title="Dashboard · Zepto AI Discovery Engine",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-try:
-    ensure_runtime_dirs()
-    from src.database import init_db
 
-    init_db()
-except Exception as exc:
-    st.error(
-        "Could not prepare the app storage folders or database. "
-        f"Please retry in a moment. Details: {exc}"
+def _format_last_updated(ts: str | None) -> str:
+    """Format fetch timestamp as DD MMM YYYY HH:MM."""
+    if not ts:
+        return "—"
+    raw = str(ts).strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(raw)
+        return dt.strftime("%d %b %Y %H:%M")
+    except ValueError:
+        pass
+    # Fallback: trim ISO-like strings
+    cleaned = raw.replace("T", " ")[:16]
+    try:
+        dt = datetime.strptime(cleaned, "%Y-%m-%d %H:%M")
+        return dt.strftime("%d %b %Y %H:%M")
+    except ValueError:
+        return cleaned or "—"
+
+
+def _source_label(source: Any) -> str:
+    key = str(source or "").strip().lower()
+    if key in {"playstore", "google play", "google_play"}:
+        return "Google Play"
+    if key in {"appstore", "apple app store", "app_store", "ios"}:
+        return "Apple App Store"
+    return str(source or "Unknown").replace("_", " ").title()
+
+
+def _load_latest_reviews(limit: int = 20) -> pd.DataFrame:
+    from src.database import fetch_all_reviews
+
+    rows = fetch_all_reviews(limit=max(limit * 5, 200))
+    if not rows:
+        return pd.DataFrame(columns=["Source", "Rating", "Review", "Date"])
+
+    df = pd.DataFrame(rows)
+    if "source" in df.columns:
+        allowed = {"playstore", "appstore"}
+        df = df[df["source"].astype(str).str.lower().isin(allowed)].copy()
+    if df.empty:
+        return pd.DataFrame(columns=["Source", "Rating", "Review", "Date"])
+
+    if "date" in df.columns:
+        df["_sort_date"] = pd.to_datetime(df["date"], errors="coerce", utc=True)
+        df = df.sort_values("_sort_date", ascending=False, na_position="last")
+    else:
+        df["_sort_date"] = pd.NaT
+
+    out = pd.DataFrame(
+        {
+            "Source": df["source"].map(_source_label) if "source" in df.columns else "—",
+            "Rating": df["rating"] if "rating" in df.columns else None,
+            "Review": df["text"] if "text" in df.columns else "",
+            "Date": df["_sort_date"].dt.strftime("%d %b %Y"),
+        }
     )
-    st.stop()
+    out["Date"] = out["Date"].fillna("—")
+    out["Review"] = out["Review"].fillna("").astype(str)
+    return out.head(limit).reset_index(drop=True)
 
-# Automatic Play Store + App Store collection + Gemini analysis (once per session)
-ensure_live_reviews_loaded()
-render_auto_status_sidebar()
 
-st.markdown(
-    """
+def render_dashboard() -> None:
+    """Executive Dashboard — KPIs, live stats, review feed, refresh."""
+    from src.auto_bootstrap import (
+        ensure_live_reviews_loaded,
+        render_auto_collect_warning,
+    )
+    from src.data_pipeline import get_live_meta
+    from src.paths import ensure_runtime_dirs
+    from src.streamlit_cache import (
+        cached_collection_stats,
+        cached_pm_insights,
+        clear_data_caches,
+    )
+
+    try:
+        ensure_runtime_dirs()
+        from src.database import init_db
+
+        init_db()
+    except Exception as exc:
+        st.error(
+            "Could not prepare the app storage folders or database. "
+            f"Please retry in a moment. Details: {exc}"
+        )
+        st.stop()
+
+    # Automatic collection on first visit this session
+    ensure_live_reviews_loaded()
+
+    st.markdown(
+        """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap');
 
@@ -68,85 +138,140 @@ h1, h2, h3 {
   font-family: 'Fraunces', Georgia, serif !important;
   letter-spacing: -0.02em;
 }
-.hero {
-  background: linear-gradient(135deg, #0B1F17 0%, #1A4D3A 45%, #2D6A4F 100%);
-  color: #F1FAEE;
-  padding: 2.2rem 2rem;
-  border-radius: 18px;
-  margin-bottom: 1.5rem;
-  position: relative;
-  overflow: hidden;
-}
-.hero::after {
-  content: "";
-  position: absolute;
-  right: -40px; top: -40px;
-  width: 220px; height: 220px;
-  background: radial-gradient(circle, rgba(149,213,178,0.35), transparent 70%);
-}
-.hero h1 { color: #F1FAEE !important; margin: 0 0 0.4rem 0; font-size: 2.1rem; }
-.hero p { color: #B7E4C7; margin: 0; font-size: 1.05rem; }
-.platform-list {
-  margin: 0.5rem 0 1.5rem 0;
-  padding-left: 1.2rem;
-  color: #1B4332;
-  line-height: 1.7;
-}
-@media (max-width: 768px) {
-  .hero { padding: 1.4rem 1.1rem; }
-  .hero h1 { font-size: 1.55rem !important; }
+div[data-testid="stMetric"] {
+  background: #F7FBF8;
+  border: 1px solid #D8F3DC;
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
 }
 </style>
 """,
-    unsafe_allow_html=True,
+        unsafe_allow_html=True,
+    )
+
+    st.title("Zepto AI Discovery Engine")
+    st.caption(
+        "AI-powered customer feedback analysis platform for Product Managers."
+    )
+
+    render_auto_collect_warning()
+
+    header_l, header_r = st.columns([3, 1])
+    with header_r:
+        refresh = st.button(
+            "🔄 Refresh Reviews",
+            type="primary",
+            use_container_width=True,
+            key="dashboard_refresh_reviews",
+        )
+
+    if refresh:
+        with st.spinner(
+            "Fetching latest Google Play and App Store reviews, updating analysis…"
+        ):
+            from src.auto_bootstrap import ensure_live_reviews_loaded as _reload
+
+            result = _reload(force=True)
+            clear_data_caches()
+        if result.get("status") == "success":
+            st.success("Reviews refreshed and analysis updated.")
+        else:
+            st.warning(
+                "Unable to fetch latest reviews. Displaying the most recently analyzed dataset."
+            )
+        st.rerun()
+
+    try:
+        stats = cached_collection_stats()
+        insights = cached_pm_insights(limit=2000)
+        live_meta = get_live_meta() or {}
+    except Exception as exc:
+        st.error(f"Could not load dashboard metrics right now. Details: {exc}")
+        stats, insights, live_meta = {"total": 0, "by_sentiment": {}}, {}, {}
+
+    by_sentiment = stats.get("by_sentiment") or {}
+    positive = int(by_sentiment.get("Positive") or 0)
+    negative = int(by_sentiment.get("Negative") or 0)
+    playstore = int(live_meta.get("playstore_count") or 0)
+    appstore = int(live_meta.get("appstore_count") or 0)
+    # Fallback to DB source breakdown when meta is empty
+    by_source = stats.get("by_source") or {}
+    if playstore <= 0:
+        playstore = int(by_source.get("playstore") or 0)
+    if appstore <= 0:
+        appstore = int(by_source.get("appstore") or 0)
+
+    growth_opps = len(insights.get("recommended_product_opportunities") or [])
+    if growth_opps == 0:
+        growth_opps = len(insights.get("most_frequent_themes") or [])
+
+    with st.container():
+        r1 = st.columns(3)
+        r1[0].metric("Total Reviews", f"{int(stats.get('total') or 0):,}")
+        r1[1].metric("Google Play Reviews", f"{playstore:,}")
+        r1[2].metric("Apple App Store Reviews", f"{appstore:,}")
+
+        r2 = st.columns(3)
+        r2[0].metric("Positive Sentiment", f"{positive:,}")
+        r2[1].metric("Negative Sentiment", f"{negative:,}")
+        r2[2].metric("Growth Opportunities", f"{growth_opps:,}")
+
+    st.markdown("## Live Customer Reviews")
+
+    with st.container():
+        s1, s2, s3 = st.columns(3)
+        s1.markdown(f"**Google Play Reviews:** {playstore:,}")
+        s2.markdown(f"**Apple App Store Reviews:** {appstore:,}")
+        s3.markdown(
+            f"**Last Updated:** {_format_last_updated(live_meta.get('last_updated'))}"
+        )
+
+    try:
+        feed = _load_latest_reviews(limit=20)
+    except Exception as exc:
+        st.warning(f"Could not load the live review feed. Details: {exc}")
+        feed = pd.DataFrame(columns=["Source", "Rating", "Review", "Date"])
+
+    if feed.empty:
+        st.info(
+            "No live reviews to display yet. Click **🔄 Refresh Reviews** to collect "
+            "the latest Google Play and App Store feedback."
+        )
+    else:
+        st.dataframe(
+            feed,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Source": st.column_config.TextColumn("Source", width="small"),
+                "Rating": st.column_config.NumberColumn("Rating", format="%.1f"),
+                "Review": st.column_config.TextColumn("Review", width="large"),
+                "Date": st.column_config.TextColumn("Date", width="small"),
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
+# Navigation: Dashboard (default) · Customer Insights · Chatbot
+# Using st.navigation so the sidebar labels match the product IA.
+# Existing page files are unchanged (backend / charts / chatbot preserved).
+# ---------------------------------------------------------------------------
+dashboard_page = st.Page(
+    render_dashboard,
+    title="Dashboard",
+    icon="📊",
+    default=True,
+)
+insights_page = st.Page(
+    "pages/1_Customer_Insights.py",
+    title="Customer Insights",
+    icon="📈",
+)
+chatbot_page = st.Page(
+    "pages/2_AI_Product_Manager_Chatbot.py",
+    title="AI Product Manager Chatbot",
+    icon="🤖",
 )
 
-st.markdown(
-    """
-<div class="hero">
-  <h1>Zepto AI Discovery Engine</h1>
-  <p>AI-powered customer feedback analysis platform for Product Managers.</p>
-</div>
-""",
-    unsafe_allow_html=True,
-)
-
-render_auto_collect_warning()
-
-st.markdown("The platform automatically:")
-st.markdown(
-    """
-<div class="platform-list">
-  <ul>
-    <li>Collects customer reviews</li>
-    <li>Performs AI sentiment analysis</li>
-    <li>Detects customer pain points</li>
-    <li>Identifies shopping habits</li>
-    <li>Segments users</li>
-    <li>Discovers product opportunities</li>
-    <li>Generates actionable PM recommendations</li>
-  </ul>
-</div>
-""",
-    unsafe_allow_html=True,
-)
-
-try:
-    stats = cached_collection_stats()
-    insights = cached_pm_insights(limit=2000)
-except Exception as exc:
-    st.error(f"Could not load dashboard metrics right now. Details: {exc}")
-    stats, insights = {"total": 0, "by_sentiment": {}}, {}
-
-by_sentiment = stats.get("by_sentiment") or {}
-positive = int(by_sentiment.get("Positive") or 0)
-pain_points = len(insights.get("top_customer_problems") or [])
-growth_opps = len(insights.get("recommended_product_opportunities") or [])
-if growth_opps == 0:
-    growth_opps = len(insights.get("most_frequent_themes") or [])
-
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Total Reviews", f"{int(stats.get('total') or 0):,}")
-k2.metric("Positive Sentiment", f"{positive:,}")
-k3.metric("Pain Points", f"{pain_points:,}")
-k4.metric("Growth Opportunities", f"{growth_opps:,}")
+pg = st.navigation([dashboard_page, insights_page, chatbot_page])
+pg.run()

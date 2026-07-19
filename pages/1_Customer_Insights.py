@@ -27,7 +27,7 @@ from src.gemini_status_ui import (
 from src.insights_ui import render_root_cause_analysis
 from src.paths import ensure_runtime_dirs
 from src.streamlit_cache import cached_discovery_dashboard, clear_data_caches
-from src.streamlit_playstore import render_last_updated_caption
+from src.streamlit_playstore import format_last_updated, render_last_updated_caption
 
 st.set_page_config(page_title="Customer Insights", page_icon="💡", layout="wide")
 

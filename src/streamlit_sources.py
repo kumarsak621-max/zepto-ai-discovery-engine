@@ -22,7 +22,9 @@ def show_source_metrics(meta_or_result: dict[str, Any] | None = None) -> None:
     c2.metric("Apple App Store Reviews", f"{appstore:,}")
     c3.metric("Merged Reviews", f"{merged:,}")
 
-    stamp = format_last_updated(data.get("download_timestamp") or data.get("last_updated"))
+    stamp = format_last_updated(
+        data.get("download_timestamp") or data.get("last_updated")
+    )
     st.caption(f"Last Updated: **{stamp}**")
 
 
