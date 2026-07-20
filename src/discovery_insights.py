@@ -877,16 +877,36 @@ def generate_gemini_discovery(
         return cached
 
     if not has_gemini():
-        return fallback
+        logger.warning("generate_gemini_discovery: no Gemini keys — evidence fallback")
+        print("[AI DEBUG] discovery: no Gemini keys — fallback", flush=True)
+        return {
+            **fallback,
+            "source": "fallback-no-keys",
+            "error_message": "No Gemini API keys configured",
+            "error_type": "ConfigurationError",
+            "error_traceback": "",
+        }
 
     # Fresh attempt for dashboard synthesis (avoids stale circuit from prior page load)
     try:
-        from src.gemini_key_manager import get_key_manager
+        from src.gemini_key_manager import get_key_manager, gemini_active_label
+        from src.config import get_gemini_model
 
         get_key_manager().reset_circuit()
+        logger.info(
+            "Discovery Gemini start key=%s model=%s reviews=%s",
+            gemini_active_label(),
+            get_gemini_model(),
+            len(reviews),
+        )
+        print(
+            f"[AI DEBUG] discovery start key={gemini_active_label()} "
+            f"model={get_gemini_model()} reviews={len(reviews)}",
+            flush=True,
+        )
     except Exception:
         logger.exception("Could not reset Gemini circuit before discovery")
-
+        print("[AI DEBUG] discovery circuit reset failed", flush=True)
     sample_lines = []
     for r in reviews[:40]:
         sample_lines.append(
@@ -950,26 +970,52 @@ def generate_gemini_discovery(
             logger.warning(
                 "Gemini discovery payload invalid after normalize — using evidence fallback"
             )
-            return {**fallback, "source": "fallback-invalid-payload"}
+            print("[AI DEBUG] discovery invalid payload — fallback", flush=True)
+            return {
+                **fallback,
+                "source": "fallback-invalid-payload",
+                "error_message": "Gemini returned an invalid discovery payload after normalize",
+                "error_type": "InvalidPayload",
+                "error_traceback": "",
+            }
         normalized["source"] = "gemini"
         _save_discovery_disk_cache(cache_key, normalized)
         logger.info("Gemini discovery dashboard generated successfully")
+        print("[AI DEBUG] discovery end SUCCESS", flush=True)
+        try:
+            from src.gemini_debug import record_ai_success
+
+            record_ai_success(stage="generate_gemini_discovery")
+        except Exception:
+            logger.exception("record_ai_success after discovery failed")
         return normalized
     except Exception as exc:
+        import traceback as _tb
+
+        from src.gemini_debug import record_ai_failure
+
+        debug = record_ai_failure(exc, stage="generate_gemini_discovery")
         logger.exception("Gemini discovery dashboard failed — using evidence fallback")
+        print(f"[AI DEBUG] discovery FINAL exception: {exc}", flush=True)
         msg = str(exc).lower()
         if "timed out" in msg or "timeout" in msg:
-            fallback = {**fallback, "source": "fallback-timeout"}
+            source = "fallback-timeout"
         elif (
             "all gemini api keys failed" in msg
             or "after trying every configured key" in msg
             or _is_auth_error(exc)
         ):
-            fallback = {**fallback, "source": "fallback-all-keys"}
+            source = "fallback-all-keys"
         else:
-            fallback = {**fallback, "source": "fallback-error"}
+            source = "fallback-error"
         # Do not disk-cache error fallbacks — allows retry after key/quota recovery
-        return fallback
+        return {
+            **fallback,
+            "source": source,
+            "error_message": str(exc),
+            "error_type": type(exc).__name__,
+            "error_traceback": debug.get("traceback") or _tb.format_exc(),
+        }
 
 
 def build_discovery_dashboard(

@@ -112,19 +112,53 @@ def build_ai_intelligence_snapshot(
     conf = float(conf or 0)
 
     gemini_ok = True
+    gemini_issue: str | None = None
     try:
         from src.config import has_gemini
+        from src.gemini_debug import get_ai_debug_snapshot
         from src.gemini_key_manager import gemini_status
 
         gemini_ok = bool(has_gemini())
+        if not gemini_ok:
+            gemini_issue = "No Gemini API keys configured"
         gstat = gemini_status()
-        if int(gstat.get("total_keys") or 0) > 0 and int(
+        dbg = get_ai_debug_snapshot()
+        # Only mark unhealthy when the latest AI debug event failed, or manager
+        # reports failures with zero successes in this process.
+        if dbg and dbg.get("ok") is False and dbg.get("exception_message"):
+            gemini_ok = False
+            gemini_issue = str(dbg.get("exception_message"))
+        elif int(gstat.get("total_keys") or 0) > 0 and int(
             gstat.get("successful_requests") or 0
         ) == 0 and int(gstat.get("failed_requests") or 0) > 0:
-            # Keys present but only failures so far — still show cached insights
             gemini_ok = False
-    except Exception:
+            gemini_issue = str(gstat.get("last_error") or "Gemini requests failing")
+        disc_src = str((discovery or {}).get("source") or "")
+        if disc_src.startswith("fallback-") and disc_src not in {
+            "fallback",
+        }:
+            # Evidence fallback due to AI/config failure
+            if disc_src not in {"fallback-invalid-payload"} or (discovery or {}).get(
+                "error_message"
+            ):
+                if (discovery or {}).get("error_message") or disc_src.startswith(
+                    ("fallback-all-keys", "fallback-error", "fallback-timeout", "fallback-no-keys", "fallback-auth")
+                ):
+                    gemini_ok = False
+                    gemini_issue = str(
+                        (discovery or {}).get("error_message")
+                        or f"Discovery source={disc_src}"
+                    )
+    except Exception as exc:
         gemini_ok = False
+        gemini_issue = str(exc)
+        print(f"[AI DEBUG] gemini_ok status check failed: {exc}", flush=True)
+        try:
+            from src.gemini_debug import record_ai_failure
+
+            record_ai_failure(exc, stage="ai_intelligence_status_check")
+        except Exception:
+            pass
 
     indicator, status_word = _analysis_status_label(
         analyzed=analyzed,
@@ -154,6 +188,7 @@ def build_ai_intelligence_snapshot(
         "status_indicator": indicator,
         "analysis_status": status_word,
         "gemini_ok": gemini_ok,
+        "gemini_issue": gemini_issue,
         "executive_summary": (
             discovery.get("executive_summary")
             or insights.get("ai_summary")
@@ -275,12 +310,19 @@ def render_ai_intelligence_section(
         try:
             from src.gemini_status_ui import render_gemini_all_keys_failed_warning
 
-            render_gemini_all_keys_failed_warning()
-        except Exception:
+            render_gemini_all_keys_failed_warning(discovery=discovery)
+        except Exception as exc:
+            print(f"[AI DEBUG] warning render failed: {exc}", flush=True)
             st.info(
                 "Showing the most recent successful AI analysis. "
                 "New analysis will retry automatically when Gemini is available."
             )
+            try:
+                from src.gemini_status_ui import render_ai_debug_expander
+
+                render_ai_debug_expander(exc, discovery=discovery, expanded=True)
+            except Exception as nested:
+                print(f"[AI DEBUG] debug expander failed: {nested}", flush=True)
 
     m1 = st.columns(4)
     m1[0].metric("Reviews Processed", f"{int(snap['reviews_processed']):,}")

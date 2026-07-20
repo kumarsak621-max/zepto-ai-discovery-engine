@@ -441,7 +441,25 @@ class GeminiKeyManager:
 
         with self._lock:
             if self._circuit_open_until and time.time() < self._circuit_open_until:
-                raise RuntimeError(ALL_KEYS_EXHAUSTED_MSG)
+                remaining = max(0.0, self._circuit_open_until - time.time())
+                reason = (
+                    f"{ALL_KEYS_EXHAUSTED_MSG} "
+                    f"(circuit open ~{remaining:.0f}s remaining; "
+                    f"last_error={self.stats.last_error or 'n/a'})"
+                )
+                logger.error("Gemini circuit open — refusing request: %s", reason)
+                print(f"[AI DEBUG] circuit OPEN: {reason}", flush=True)
+                try:
+                    from src.gemini_debug import record_ai_failure
+
+                    record_ai_failure(
+                        RuntimeError(reason),
+                        stage="circuit_open",
+                        extra={"last_error": self.stats.last_error},
+                    )
+                except Exception:
+                    logger.exception("record_ai_failure on circuit open failed")
+                raise RuntimeError(reason)
 
         models = resolve_model_candidates(model_name)
         with self._lock:
@@ -453,10 +471,16 @@ class GeminiKeyManager:
         attempt = 0
 
         logger.info(
-            "Gemini request start: total_keys=%s models=%s prompt_chars=%s",
+            "Gemini request start: total_keys=%s active_key=%s models=%s prompt_chars=%s",
             n_keys,
+            start + 1,
             models,
             len(prompt),
+        )
+        print(
+            f"[AI DEBUG] request start keys={n_keys} active_key={start + 1} "
+            f"models={models} prompt_chars={len(prompt)}",
+            flush=True,
         )
 
         for model in models:
@@ -474,11 +498,15 @@ class GeminiKeyManager:
                     model,
                     attempt,
                 )
+                print(
+                    f"[AI DEBUG] attempt={attempt} key={key_number}/{n_keys} model={model}",
+                    flush=True,
+                )
                 if on_key_used:
                     try:
                         on_key_used(f"Key {key_number} of {n_keys}")
-                    except Exception:
-                        pass
+                    except Exception as cb_exc:
+                        logger.warning("on_key_used callback failed: %s", cb_exc)
 
                 try:
                     text = self._generate_once(key, model, prompt)
@@ -500,6 +528,17 @@ class GeminiKeyManager:
                         model,
                         attempt,
                     )
+                    print(
+                        f"[AI DEBUG] request end SUCCESS key={key_number} model={model} "
+                        f"attempt={attempt}",
+                        flush=True,
+                    )
+                    try:
+                        from src.gemini_debug import record_ai_success
+
+                        record_ai_success(stage="generate_content")
+                    except Exception:
+                        logger.exception("record_ai_success failed")
                     return text
                 except Exception as exc:
                     last_error = exc
@@ -514,15 +553,21 @@ class GeminiKeyManager:
                         self.active_index = (idx + 1) % n_keys
                         self.stats.active_index = self.active_index
 
+                    tb = traceback.format_exc()
                     logger.error(
-                        "Gemini request failure: key_number=%s model=%s "
+                        "Gemini failover: key_number=%s model=%s "
                         "attempt=%s reason=%s next_key=%s\n%s",
                         key_number,
                         model,
                         attempt,
                         reason[:240],
                         (idx + 1) % n_keys + 1,
-                        traceback.format_exc(),
+                        tb,
+                    )
+                    print(
+                        f"[AI DEBUG] FAILOVER key={key_number} model={model} "
+                        f"attempt={attempt} reason={reason[:240]}\n{tb}",
+                        flush=True,
                     )
 
                     backoff = min(
@@ -539,16 +584,34 @@ class GeminiKeyManager:
             self._circuit_open_until = time.time() + cooldown
             self.stats.last_error = safe_last
 
+        final_tb = traceback.format_exc() if last_error else ""
         logger.error(
-            "Gemini exhausted all keys/models: attempts=%s total_keys=%s "
-            "models=%s last_reason=%s\n%s",
+            "Gemini FINAL exception — exhausted all keys/models: attempts=%s "
+            "total_keys=%s models=%s last_reason=%s\n%s",
             attempt,
             n_keys,
             models,
             safe_last[:240],
-            traceback.format_exc() if last_error else "",
+            final_tb,
         )
-        raise RuntimeError(ALL_KEYS_EXHAUSTED_MSG)
+        print(
+            f"[AI DEBUG] FINAL EXCEPTION attempts={attempt} keys={n_keys} "
+            f"models={models} last={safe_last}\n{final_tb}",
+            flush=True,
+        )
+        try:
+            from src.gemini_debug import record_ai_failure
+
+            record_ai_failure(
+                last_error or RuntimeError(ALL_KEYS_EXHAUSTED_MSG),
+                stage="generate_content_exhausted",
+                attempt=attempt,
+                extra={"models_tried": models, "total_keys": n_keys},
+            )
+        except Exception:
+            logger.exception("record_ai_failure failed after exhaustion")
+        raise RuntimeError(ALL_KEYS_EXHAUSTED_MSG) from last_error
+
 
 
 _MANAGER: GeminiKeyManager | None = None

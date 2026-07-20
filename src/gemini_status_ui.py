@@ -1,4 +1,4 @@
-"""Streamlit UI for Gemini multi-key health status."""
+"""Streamlit UI for Gemini multi-key health status + AI debug visibility."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ def render_gemini_api_status(*, expanded: bool = False) -> None:
         from src.gemini_key_manager import gemini_active_label, gemini_status
     except Exception as exc:
         st.warning(f"Gemini key manager unavailable: {exc}")
+        print(f"[AI DEBUG] gemini status UI failed: {exc}", flush=True)
         return
 
     status = gemini_status()
@@ -56,16 +57,76 @@ def render_gemini_key_caption() -> None:
 
         if has_gemini():
             st.caption(f"{gemini_active_label()} · model `{get_gemini_model()}`")
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[AI DEBUG] gemini key caption failed: {exc}", flush=True)
 
 
-def render_gemini_all_keys_failed_warning(exc: BaseException | None = None) -> None:
-    """Single professional warning — only after every configured Gemini key failed."""
-    # Keep signature for callers; never surface technical exception text in the UI.
-    _ = exc
+def render_ai_debug_expander(
+    exc: BaseException | None = None,
+    *,
+    discovery: dict | None = None,
+    expanded: bool = False,
+) -> None:
+    """Always-available Debug Information panel for AI failures / fallbacks."""
+    from src.gemini_debug import format_debug_text, get_ai_debug_snapshot, record_ai_failure
+
+    snap = get_ai_debug_snapshot()
+    if exc is not None and (not snap.get("exception_message") or snap.get("ok")):
+        snap = record_ai_failure(exc, stage="ui-warning")
+
+    # Prefer discovery-attached error when present
+    if discovery:
+        if discovery.get("error_message") and (
+            not snap.get("exception_message") or snap.get("ok")
+        ):
+            snap = {
+                **snap,
+                "ok": False,
+                "stage": discovery.get("source") or "discovery-fallback",
+                "exception_message": discovery.get("error_message"),
+                "exception_type": discovery.get("error_type") or "Exception",
+                "traceback": discovery.get("error_traceback") or snap.get("traceback") or "",
+                "message": discovery.get("error_message"),
+            }
+
+    with st.expander("Debug Information", expanded=expanded):
+        st.caption(
+            "Technical details for AI analysis failures. "
+            "API keys are never shown in full."
+        )
+        try:
+            from src.config import get_gemini_model, has_gemini
+            from src.gemini_key_manager import gemini_active_label, gemini_status
+
+            st.write(f"**Has Gemini keys:** `{has_gemini()}`")
+            st.write(f"**Active key:** `{gemini_active_label()}`")
+            st.write(f"**Configured model:** `{get_gemini_model()}`")
+            status = gemini_status()
+            st.write(f"**Manager model:** `{status.get('model_name')}`")
+            st.write(f"**Failovers:** `{status.get('failovers')}`")
+            st.write(f"**Successful requests:** `{status.get('successful_requests')}`")
+            st.write(f"**Failed requests:** `{status.get('failed_requests')}`")
+            if discovery:
+                st.write(f"**Discovery source:** `{discovery.get('source')}`")
+        except Exception as status_exc:
+            st.write(f"Could not load Gemini status: `{status_exc}`")
+            print(f"[AI DEBUG] status block failed: {status_exc}", flush=True)
+
+        st.code(format_debug_text(snap), language="text")
+
+
+def render_gemini_all_keys_failed_warning(
+    exc: BaseException | None = None,
+    *,
+    discovery: dict | None = None,
+) -> None:
+    """
+    Professional warning after Gemini failure — keeps cached insights visible,
+    and always surfaces the real cause under Debug Information.
+    """
     st.warning(
         "AI analysis is temporarily unavailable. "
         "The dashboard is displaying the most recent successfully analyzed insights. "
         "Please try again later."
     )
+    render_ai_debug_expander(exc, discovery=discovery, expanded=True)

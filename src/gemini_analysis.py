@@ -61,9 +61,6 @@ STRUCTURED_KEYS = (
 
 def generate_gemini_text(prompt: str) -> str:
     """Generate text via the shared multi-key Gemini manager (automatic failover)."""
-    import logging
-
-    log = logging.getLogger(__name__)
     text = (prompt or "").strip()
     if not text:
         raise ValueError("Gemini prompt is empty")
@@ -72,12 +69,33 @@ def generate_gemini_text(prompt: str) -> str:
             "No Gemini API keys configured. Set GEMINI_API_KEY / GEMINI_API_KEY_1…_5 "
             "in Streamlit Secrets or .env."
         )
-    from src.gemini_key_manager import generate_with_failover
+    from src.config import get_gemini_model
+    from src.gemini_debug import record_ai_failure, record_ai_success
+    from src.gemini_key_manager import generate_with_failover, gemini_active_label
 
+    logger.info(
+        "generate_gemini_text start key=%s model=%s prompt_chars=%s",
+        gemini_active_label(),
+        get_gemini_model(),
+        len(text),
+    )
+    print(
+        f"[AI DEBUG] generate_gemini_text start key={gemini_active_label()} "
+        f"model={get_gemini_model()} chars={len(text)}",
+        flush=True,
+    )
     try:
-        return generate_with_failover(text)
-    except Exception:
-        log.exception("generate_gemini_text failed after key/model failover")
+        out = generate_with_failover(text)
+        record_ai_success(stage="generate_gemini_text")
+        logger.info("generate_gemini_text end SUCCESS chars=%s", len(out or ""))
+        print(
+            f"[AI DEBUG] generate_gemini_text end SUCCESS chars={len(out or '')}",
+            flush=True,
+        )
+        return out
+    except Exception as exc:
+        record_ai_failure(exc, stage="generate_gemini_text")
+        logger.exception("generate_gemini_text failed after key/model failover")
         raise
 
 
@@ -274,6 +292,8 @@ def analyze_review(
         return _fallback_analysis("", rating)
 
     if not has_gemini():
+        logger.warning("analyze_review: no Gemini keys — using rule-based fallback")
+        print("[AI DEBUG] analyze_review: no Gemini keys — fallback", flush=True)
         return _fallback_analysis(text, rating)
 
     prompt = ANALYSIS_PROMPT.format(
@@ -289,7 +309,13 @@ def analyze_review(
         data = _extract_json(raw or "")
         return _normalize(data, text)
     except Exception as exc:
-        logger.warning("Gemini analysis failed: %s", exc)
+        from src.gemini_debug import record_ai_failure
+
+        record_ai_failure(exc, stage="analyze_review")
+        logger.exception(
+            "Gemini analyze_review failed — using fallback=%s", use_fallback_on_error
+        )
+        print(f"[AI DEBUG] analyze_review failed: {exc}", flush=True)
         if use_fallback_on_error:
             return _fallback_analysis(text, rating)
         raise
@@ -398,7 +424,11 @@ Do not invent fake quotes that contradict the evidence.
     try:
         return generate_gemini_text(prompt)
     except Exception as exc:
-        logger.error("PM answer generation failed: %s", exc)
+        from src.gemini_debug import record_ai_failure
+
+        record_ai_failure(exc, stage="generate_pm_answer")
+        logger.exception("PM answer generation failed")
+        print(f"[AI DEBUG] generate_pm_answer failed: {exc}", flush=True)
         # Fall back to structured evidence brief (no live Gemini)
         quotes = "\n".join(
             f'{i}. "{(_s(e.get("text")) or _s(e.get("review_summary")))[:180]}"'

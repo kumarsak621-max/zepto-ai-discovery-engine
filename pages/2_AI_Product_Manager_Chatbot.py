@@ -121,21 +121,23 @@ if prompt:
                 }
             )
         except Exception as exc:
+            from src.gemini_debug import record_ai_failure
             from src.gemini_key_manager import is_all_keys_exhausted_error
+            from src.gemini_status_ui import render_ai_debug_expander
 
-            if is_all_keys_exhausted_error(exc):
-                friendly = (
-                    "AI analysis is temporarily unavailable. "
-                    "The dashboard is displaying the most recent successfully analyzed insights. "
-                    "Please try again later."
-                )
-            else:
-                friendly = (
-                    "AI analysis is temporarily unavailable. "
-                    "The dashboard is displaying the most recent successfully analyzed insights. "
-                    "Please try again later."
-                )
+            record_ai_failure(exc, stage="pm_chatbot")
+            print(f"[AI DEBUG] chatbot exception: {exc}", flush=True)
+            friendly = (
+                "AI analysis is temporarily unavailable. "
+                "The dashboard is displaying the most recent successfully analyzed insights. "
+                "Please try again later."
+            )
             st.warning(friendly)
+            if is_all_keys_exhausted_error(exc):
+                st.caption("Cause: all configured Gemini API keys failed.")
+            else:
+                st.caption(f"Cause: `{type(exc).__name__}: {exc}`")
+            render_ai_debug_expander(exc, expanded=True)
             st.session_state.pm_messages.append(
                 {"role": "assistant", "content": friendly, "evidence": []}
             )

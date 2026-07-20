@@ -205,10 +205,16 @@ if not isinstance(reviews, list) or not reviews:
     st.stop()
 
 _discovery_source = str((dash.get("discovery") or {}).get("source") or "")
-if _discovery_source.startswith("fallback-all-keys") or _discovery_source.startswith(
-    "fallback-auth"
+_discovery = dash.get("discovery") or {}
+if (
+    _discovery_source.startswith("fallback-all-keys")
+    or _discovery_source.startswith("fallback-auth")
+    or _discovery_source.startswith("fallback-error")
+    or _discovery_source.startswith("fallback-timeout")
+    or _discovery_source.startswith("fallback-no-keys")
+    or _discovery.get("error_message")
 ):
-    render_gemini_all_keys_failed_warning()
+    render_gemini_all_keys_failed_warning(discovery=_discovery)
 
 try:
     df = pd.DataFrame(reviews)

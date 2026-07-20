@@ -385,6 +385,13 @@ def build_filtered_dashboard(
         )
     except Exception as exc:
         logger.exception("Filtered discovery dashboard failed")
+        print(f"[AI DEBUG] build_filtered_dashboard failed: {exc}", flush=True)
+        try:
+            from src.gemini_debug import record_ai_failure
+
+            record_ai_failure(exc, stage="build_filtered_dashboard")
+        except Exception:
+            pass
         base = {
             "reviews": reviews,
             "insights": (
@@ -407,7 +414,12 @@ def build_filtered_dashboard(
                 }
             ),
             "sentiment": {},
-            "discovery": {"source": "fallback-error", "ai_confidence_score": 0},
+            "discovery": {
+                "source": "fallback-error",
+                "ai_confidence_score": 0,
+                "error_message": str(exc),
+                "error_type": type(exc).__name__,
+            },
             "validation": {},
             "review_sources": {},
             "review_kpis": {},
