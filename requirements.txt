@@ -1,6 +1,7 @@
 streamlit>=1.32.0,<2
 google-play-scraper>=1.2.7,<2
 google-generativeai>=0.8.0,<1
+google-genai>=1.0.0,<3
 pandas>=2.2.0,<3
 openpyxl>=3.1.0,<4
 python-dotenv>=1.0.1,<2

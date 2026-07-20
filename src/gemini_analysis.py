@@ -60,10 +60,25 @@ STRUCTURED_KEYS = (
 
 
 def generate_gemini_text(prompt: str) -> str:
-    """Generate text via multi-key Gemini manager (automatic failover)."""
+    """Generate text via the shared multi-key Gemini manager (automatic failover)."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    text = (prompt or "").strip()
+    if not text:
+        raise ValueError("Gemini prompt is empty")
+    if not has_gemini():
+        raise RuntimeError(
+            "No Gemini API keys configured. Set GEMINI_API_KEY / GEMINI_API_KEY_1…_5 "
+            "in Streamlit Secrets or .env."
+        )
     from src.gemini_key_manager import generate_with_failover
 
-    return generate_with_failover(prompt)
+    try:
+        return generate_with_failover(text)
+    except Exception:
+        log.exception("generate_gemini_text failed after key/model failover")
+        raise
 
 
 def _extract_json(raw: str) -> dict[str, Any]:

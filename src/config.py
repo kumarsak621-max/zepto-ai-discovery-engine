@@ -105,7 +105,7 @@ def get_gemini_api_key() -> str:
 def get_gemini_model() -> str:
     """Gemini model name from Streamlit Secrets, then env / .env."""
     model = _secret_or_env("GEMINI_MODEL", "")
-    return (model or "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+    return (model or "gemini-flash-latest").strip() or "gemini-flash-latest"
 
 
 # Public config values used across the app (never hardcode secrets)

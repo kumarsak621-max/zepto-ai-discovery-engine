@@ -835,7 +835,11 @@ def _save_discovery_disk_cache(cache_key: str, discovery: dict[str, Any]) -> Non
 
 
 def _call_gemini_discovery_json(prompt: str) -> dict[str, Any]:
+    if not (prompt or "").strip():
+        raise ValueError("Discovery prompt is empty")
     raw = generate_gemini_text(prompt)
+    if not (raw or "").strip():
+        raise RuntimeError("Gemini returned an empty discovery response")
     return _extract_json(raw or "")
 
 
@@ -872,6 +876,14 @@ def generate_gemini_discovery(
     if not has_gemini():
         return fallback
 
+    # Fresh attempt for dashboard synthesis (avoids stale circuit from prior page load)
+    try:
+        from src.gemini_key_manager import get_key_manager
+
+        get_key_manager().reset_circuit()
+    except Exception:
+        logger.exception("Could not reset Gemini circuit before discovery")
+
     sample_lines = []
     for r in reviews[:40]:
         sample_lines.append(
@@ -903,7 +915,7 @@ def generate_gemini_discovery(
         samples="\n".join(sample_lines)[:8000],
     )
     try:
-        # Key manager handles timeouts, retries, and multi-key failover
+        # Key manager handles timeouts, retries, multi-key + multi-model failover
         data = _call_gemini_discovery_json(prompt)
         normalized = _normalize_gemini_payload(data, kpi_seeds)
         # Ensure required lists are populated from evidence-based fallback
@@ -932,27 +944,26 @@ def generate_gemini_discovery(
                 rca["pm_insights"] = fb_rca["pm_insights"]
             normalized["root_cause_analysis"] = rca
         if not _discovery_payload_is_valid(normalized):
-            return fallback
+            logger.warning(
+                "Gemini discovery payload invalid after normalize — using evidence fallback"
+            )
+            return {**fallback, "source": "fallback-invalid-payload"}
         normalized["source"] = "gemini"
         _save_discovery_disk_cache(cache_key, normalized)
+        logger.info("Gemini discovery dashboard generated successfully")
         return normalized
     except Exception as exc:
+        logger.exception("Gemini discovery dashboard failed — using evidence fallback")
         msg = str(exc).lower()
         if "timed out" in msg or "timeout" in msg:
-            logger.warning("Gemini discovery timed out — using evidence fallback")
             fallback = {**fallback, "source": "fallback-timeout"}
         elif (
             "all gemini api keys failed" in msg
             or "after trying every configured key" in msg
             or _is_auth_error(exc)
         ):
-            # Key manager already exhausted every configured key before raising.
-            logger.warning(
-                "Discovery using evidence fallback after all Gemini keys were tried"
-            )
             fallback = {**fallback, "source": "fallback-all-keys"}
         else:
-            logger.warning("Gemini discovery dashboard failed: %s", exc)
             fallback = {**fallback, "source": "fallback-error"}
         # Do not disk-cache error fallbacks — allows retry after key/quota recovery
         return fallback
