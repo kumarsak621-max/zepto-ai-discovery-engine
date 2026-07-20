@@ -26,6 +26,12 @@ from src.gemini_status_ui import (
 )
 from src.insights_ui import render_root_cause_analysis
 from src.paths import ensure_runtime_dirs
+from src.review_source_ui import (
+    ensure_source_data_loaded,
+    render_review_filters,
+    render_review_source_selector,
+    render_visible_reviews_table,
+)
 from src.review_sync import get_refresh_status
 from src.streamlit_cache import cached_filtered_dashboard, clear_data_caches
 from src.streamlit_playstore import format_last_updated, render_last_updated_caption
@@ -102,17 +108,30 @@ except Exception as exc:
     st.error(f"Could not initialize storage. Details: {exc}")
     st.stop()
 
-try:
-    ensure_live_reviews_loaded()
-    render_auto_status_sidebar()
-except Exception as exc:
-    st.sidebar.warning(f"Live data status unavailable: {exc}")
-
 st.title("💡 Customer Insights")
 st.caption(
     "AI Discovery Engine for Zepto PMs — historical warehouse + live store reviews, "
     "sentiment, habits, segments, discovery barriers, and growth recommendations."
 )
+
+st.markdown("---")
+data_source = render_review_source_selector(key_prefix="ci")
+# Historical = DB only (no fetch). Live = force fetch. Combined = normal sync.
+ensure_source_data_loaded(data_source, key_prefix="ci")
+if data_source != "historical":
+    try:
+        # Combined / Live: keep existing auto-collect + sidebar status
+        if data_source == "combined":
+            ensure_live_reviews_loaded()
+        render_auto_status_sidebar()
+    except Exception as exc:
+        st.sidebar.warning(f"Live data status unavailable: {exc}")
+else:
+    try:
+        render_auto_status_sidebar()
+    except Exception:
+        pass
+
 render_auto_collect_warning()
 
 _refresh = get_refresh_status()
@@ -130,72 +149,12 @@ st.caption(
 )
 render_gemini_key_caption()
 
-st.markdown("---")
-st.subheader("Data Source")
-_data_source_label = st.radio(
-    "Select review corpus",
-    options=["Historical Reviews", "Live Reviews", "Historical + Live"],
-    horizontal=True,
-    key="ci_data_source",
-)
-_DATA_SOURCE_MAP = {
-    "Historical Reviews": "historical",
-    "Live Reviews": "live",
-    "Historical + Live": "combined",
-}
-data_source = _DATA_SOURCE_MAP.get(_data_source_label, "combined")
-
-with st.expander("Filters", expanded=True):
-    f1, f2, f3, f4 = st.columns(4)
-    with f1:
-        date_range_label = st.selectbox(
-            "Date Range",
-            [
-                "All Time",
-                "Last 24 Hours",
-                "Last 7 Days",
-                "Last 30 Days",
-                "Last 90 Days",
-            ],
-            key="ci_date_range",
-        )
-    with f2:
-        platform_label = st.selectbox(
-            "Platform",
-            ["Both", "Google Play", "Apple Store"],
-            key="ci_platform",
-        )
-    with f3:
-        rating_sel = st.multiselect(
-            "Rating",
-            options=[1, 2, 3, 4, 5],
-            default=[],
-            format_func=lambda x: f"{x}★",
-            key="ci_ratings",
-        )
-    with f4:
-        sentiment_sel = st.multiselect(
-            "Sentiment",
-            options=["Positive", "Neutral", "Negative"],
-            default=[],
-            key="ci_sentiments",
-        )
-
-_DATE_MAP = {
-    "All Time": "all",
-    "Last 24 Hours": "24h",
-    "Last 7 Days": "7d",
-    "Last 30 Days": "30d",
-    "Last 90 Days": "90d",
-}
-date_range = _DATE_MAP.get(date_range_label, "all")
-platform = {
-    "Both": "both",
-    "Google Play": "playstore",
-    "Apple Store": "appstore",
-}.get(platform_label, "both")
-ratings_key = ",".join(str(r) for r in sorted(rating_sel)) if rating_sel else ""
-sentiments_key = "|".join(sentiment_sel) if sentiment_sel else ""
+_filters = render_review_filters(key_prefix="ci")
+date_range = _filters["date_range"]
+platform = _filters["platform"]
+ratings_key = _filters["ratings_key"]
+sentiments_key = _filters["sentiments_key"]
+keyword_query = _filters["keyword"]
 
 dash: dict[str, Any] = {}
 try:
@@ -207,7 +166,7 @@ try:
                 platform=platform,
                 ratings_key=ratings_key,
                 sentiments_key=sentiments_key,
-                limit=2000,
+                limit=10000,
             )
             or {}
         )
@@ -234,17 +193,22 @@ extended = dash.get("extended_analysis") or {}
 _hc = int(warehouse.get("total_historical") or 0)
 _lc = int(warehouse.get("total_live") or 0)
 _mc = int(warehouse.get("merged_reviews") or 0)
+_source_label = {
+    "historical": "Historical Reviews",
+    "live": "Live Reviews",
+    "combined": "Historical + Live Reviews",
+}.get(data_source, "Historical + Live Reviews")
 st.caption(
-    f"Warehouse · Historical: **{_hc:,}** · Live window: **{_lc:,}** · "
-    f"Merged: **{_mc:,}** · Filtered view: **{len(reviews):,}** "
-    f"({_data_source_label})"
+    f"Warehouse · Historical: **{_hc:,}** · Live batch/window: **{_lc:,}** · "
+    f"Merged: **{_mc:,}** · Loaded for analysis: **{len(reviews):,}** "
+    f"({_source_label})"
 )
 
 if not isinstance(reviews, list) or not reviews:
     st.warning(
         "No reviews match the current filters (or the warehouse is empty). "
-        "Try **Historical + Live**, widen the date range, or reload to collect "
-        "from Google Play and the App Store."
+        "Try **Historical + Live Reviews**, widen the date range, or switch to "
+        "**Live Reviews** to fetch from Google Play and the App Store."
     )
     st.stop()
 
@@ -272,6 +236,21 @@ if analyzed_count <= 0:
         "Click **↻ Re-run advanced analysis on pending reviews** at the bottom, "
         "or reload the app to retry automatic collection and analysis."
     )
+
+
+# =============================================================================
+# Visible Reviews (interactive table + search + export) — ADDITIVE
+# =============================================================================
+def _section_visible_reviews() -> None:
+    render_visible_reviews_table(
+        reviews,
+        data_source=data_source,
+        keyword=keyword_query,
+        key_prefix="ci",
+    )
+
+
+_safe_section("Visible Reviews", _section_visible_reviews)
 
 
 # =============================================================================
@@ -305,11 +284,16 @@ _safe_section("Live Dashboard", _section_warehouse)
 # =============================================================================
 def _section_ai_analysis() -> None:
     st.markdown("---")
-    st.header("AI Analysis")
+    analysis_title = {
+        "historical": "Historical AI Analysis",
+        "live": "Live AI Analysis",
+        "combined": "Combined AI Analysis",
+    }.get(data_source, "AI Analysis")
+    st.header(analysis_title)
     mode_label = {
         "historical": "Historical Reviews only",
         "live": "Live Reviews only",
-        "combined": "Merged Reviews (Historical + Live)",
+        "combined": "Historical + Live Reviews (merged)",
     }.get(data_source, "Merged Reviews")
     st.caption(f"Gemini / evidence analysis for: **{mode_label}**")
     conf = discovery.get("ai_confidence_score") or extended.get("confidence_score") or 0

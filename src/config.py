@@ -141,6 +141,7 @@ AUTO_REFRESH_MINUTES = _env_int("AUTO_REFRESH_MINUTES", 30)
 REVIEWS_CSV_PATH = DATA_DIR / "reviews.csv"
 LIVE_META_PATH = DATA_DIR / "live_reviews_meta.json"
 SYNC_META_PATH = DATA_DIR / "review_sync_meta.json"
+LIVE_BATCH_PATH = DATA_DIR / "live_batch_keys.json"
 
 LIVE_CHAT_SOURCES = ("playstore", "appstore")
 

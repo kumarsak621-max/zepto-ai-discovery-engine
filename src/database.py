@@ -661,23 +661,22 @@ def fetch_reviews_filtered(
     ratings: list[int] | None = None,
     sentiments: list[str] | None = None,
     live_window_days: int = 7,
+    live_batch_keys: list[str] | None = None,
     limit: int | None = 5000,
     db_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     """
     Query the historical warehouse with optional live/historical split and filters.
 
-    data_source: historical | live | combined
-    date_range: 24h | 7d | 30d | 90d | all
-    platforms: playstore / appstore
+    data_source:
+      - historical → all rows already stored in SQLite
+      - live → only reviews from the latest live fetch batch (content_hash)
+      - combined → full warehouse (merged / deduped at ingest)
     """
-    # Fetch a wide slice first, filter in Python, then apply limit.
-    # (Ordering by date DESC would otherwise starve "historical" when limit is small.)
     fetch_cap = None if limit is None else max(int(limit) * 20, 5000)
     rows = fetch_all_reviews(limit=fetch_cap, db_path=db_path)
     now = datetime.now(timezone.utc)
 
-    # Date-range filter on review date (fallback fetched_at / created_at)
     range_days = {"24h": 1, "7d": 7, "30d": 30, "90d": 90}.get(
         str(date_range or "all").lower()
     )
@@ -690,6 +689,15 @@ def fetch_reviews_filtered(
     from datetime import timedelta as _td
 
     live_cutoff = now - _td(days=max(1, int(live_window_days or 7)))
+
+    batch_keys = {str(k) for k in (live_batch_keys or []) if k}
+    if not batch_keys:
+        try:
+            from src.data_pipeline import load_live_batch_keys
+
+            batch_keys = set(load_live_batch_keys())
+        except Exception:
+            batch_keys = set()
 
     platform_set = {str(p).lower() for p in (platforms or []) if p}
     rating_set = set()
@@ -708,12 +716,17 @@ def fetch_reviews_filtered(
             or _parse_iso(row.get("fetched_at"))
             or _parse_iso(row.get("created_at"))
         )
-        # Live = recent window; Historical = older warehouse slice; Combined = all
-        is_live = bool(event_dt and event_dt >= live_cutoff)
-        if mode == "live" and not is_live:
-            continue
-        if mode == "historical" and is_live:
-            continue
+        chash = str(row.get("content_hash") or "")
+        in_live_batch = bool(chash and chash in batch_keys)
+        is_live = in_live_batch or bool(event_dt and event_dt >= live_cutoff)
+
+        if mode == "live":
+            if batch_keys:
+                if not in_live_batch:
+                    continue
+            elif not (event_dt and event_dt >= live_cutoff):
+                continue
+        # historical + combined → keep all stored rows (subject to other filters)
 
         if range_cutoff is not None:
             if not event_dt or event_dt < range_cutoff:
@@ -736,7 +749,6 @@ def fetch_reviews_filtered(
             if sent not in sentiment_set:
                 continue
 
-        # Canonical aliases for UI / export
         enriched = dict(row)
         enriched["review_id"] = row.get("external_id") or row.get("id")
         enriched["review_text"] = row.get("text")

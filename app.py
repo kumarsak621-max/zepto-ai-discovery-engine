@@ -256,6 +256,50 @@ div[data-testid="stMetric"] {
         r2[1].metric("Negative Sentiment", f"{negative:,}")
         r2[2].metric("Growth Opportunities", f"{growth_opps:,}")
 
+    # --- ADDITIVE: Review Source + Visible Reviews (does not replace existing feed) ---
+    st.markdown("---")
+    from src.review_source_ui import (
+        ensure_source_data_loaded,
+        render_review_filters,
+        render_review_source_selector,
+        render_visible_reviews_table,
+    )
+    from src.streamlit_cache import cached_filtered_dashboard
+
+    dash_source = render_review_source_selector(key_prefix="dash")
+    ensure_source_data_loaded(dash_source, key_prefix="dash")
+    if dash_source == "combined":
+        # Keep default auto-collect behavior for merged mode
+        pass
+    dash_filters = render_review_filters(key_prefix="dash")
+    try:
+        filtered_dash = cached_filtered_dashboard(
+            data_source=dash_source,
+            date_range=dash_filters["date_range"],
+            platform=dash_filters["platform"],
+            ratings_key=dash_filters["ratings_key"],
+            sentiments_key=dash_filters["sentiments_key"],
+            limit=10000,
+        ) or {}
+        source_reviews = filtered_dash.get("reviews") or []
+        # Dynamic metrics for the selected Review Source (additive row)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Selected source reviews", f"{len(source_reviews):,}")
+        sent_map = {}
+        for r in source_reviews:
+            s = str(r.get("sentiment") or "Unanalyzed")
+            sent_map[s] = sent_map.get(s, 0) + 1
+        m2.metric("Positive (selected)", f"{int(sent_map.get('Positive') or 0):,}")
+        m3.metric("Negative (selected)", f"{int(sent_map.get('Negative') or 0):,}")
+        render_visible_reviews_table(
+            source_reviews,
+            data_source=dash_source,
+            keyword=dash_filters.get("keyword") or "",
+            key_prefix="dash",
+        )
+    except Exception as exc:
+        st.warning(f"Review Source table could not load. Details: {exc}")
+
     st.markdown("## Live Customer Reviews")
 
     with st.container():

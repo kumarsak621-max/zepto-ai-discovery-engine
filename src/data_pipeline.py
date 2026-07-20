@@ -16,6 +16,7 @@ import pandas as pd
 
 from src.appstore_scraper import collect_appstore_or_empty
 from src.config import (
+    LIVE_BATCH_PATH,
     LIVE_CACHE_TTL_HOURS,
     LIVE_META_PATH,
     PLAYSTORE_CACHE_TTL_HOURS,
@@ -25,6 +26,7 @@ from src.config import (
 from src.database import (
     bulk_upsert,
     clean_text,
+    content_hash,
     fetch_unanalyzed,
     finish_pipeline_run,
     init_db,
@@ -219,6 +221,46 @@ def get_live_meta() -> dict[str, Any]:
         return {}
 
 
+def save_live_batch_keys(reviews: list[dict[str, Any]]) -> list[str]:
+    """
+    Persist content hashes for the latest live fetch batch.
+
+    Live Reviews mode displays only these newly fetched reviews.
+    """
+    ensure_runtime_dirs()
+    keys: list[str] = []
+    seen: set[str] = set()
+    for row in reviews:
+        text = (row.get("text") or row.get("review_text") or "").strip()
+        if not text:
+            continue
+        source = row.get("source") or "unknown"
+        external_id = row.get("external_id") or row.get("review_id")
+        chash = row.get("content_hash") or content_hash(text, source, external_id)
+        if chash in seen:
+            continue
+        seen.add(chash)
+        keys.append(chash)
+    payload = {
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "count": len(keys),
+        "keys": keys,
+    }
+    LIVE_BATCH_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return keys
+
+
+def load_live_batch_keys() -> list[str]:
+    if not LIVE_BATCH_PATH.exists():
+        return []
+    try:
+        payload = json.loads(LIVE_BATCH_PATH.read_text(encoding="utf-8"))
+        keys = payload.get("keys") or []
+        return [str(k) for k in keys if k]
+    except Exception:
+        return []
+
+
 def live_data_is_fresh(ttl_hours: int | None = None) -> bool:
     meta = get_live_meta()
     last = meta.get("last_updated")
@@ -353,6 +395,7 @@ def run_live_review_analysis(
         _progress(0.75, "Saving merged reviews to feedback.db…")
         inserted = bulk_upsert(merged)
         counts["new_reviews"] = inserted
+        live_batch_keys = save_live_batch_keys(merged)
 
         # --- Step 6: Gemini ---
         _progress(0.88, "Running Gemini analysis on merged dataset…")
@@ -371,6 +414,8 @@ def run_live_review_analysis(
             "download_timestamp": live_meta.get("last_updated"),
             "merged_csv": merged_path,
             "source_messages": source_messages,
+            "live_batch_keys": live_batch_keys,
+            "live_batch_count": len(live_batch_keys),
             **counts,
         }
     except Exception as exc:

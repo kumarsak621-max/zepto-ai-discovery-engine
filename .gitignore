@@ -12,6 +12,7 @@ data/reviews_cache_meta.json
 data/merged_reviews.csv
 data/live_reviews_meta.json
 data/review_sync_meta.json
+data/live_batch_keys.json
 data/discovery_insights_cache.json
 data/manual_reviews.csv
 data/manual_reviews_meta.json
