@@ -666,13 +666,20 @@ def fetch_reviews_filtered(
     db_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Query the historical warehouse with optional live/historical split and filters.
+    Query reviews with fixed Historical / Live calendar date separation.
 
     data_source:
-      - historical → all rows already stored in SQLite
-      - live → only reviews from the latest live fetch batch (content_hash)
-      - combined → full warehouse (merged / deduped at ingest)
+      - historical → review_date in [01 Apr 2026, 05 Jul 2026] inclusive
+      - live → review_date >= 06 Jul 2026 (open-ended to latest)
+      - combined → historical ∪ live (deduped by content_hash at ingest)
     """
+    from src.review_dates import (
+        is_combined_date,
+        is_historical_date,
+        is_live_date,
+        parse_review_date,
+    )
+
     fetch_cap = None if limit is None else max(int(limit) * 20, 5000)
     rows = fetch_all_reviews(limit=fetch_cap, db_path=db_path)
     now = datetime.now(timezone.utc)
@@ -686,18 +693,8 @@ def fetch_reviews_filtered(
 
         range_cutoff = now - timedelta(days=range_days)
 
-    from datetime import timedelta as _td
-
-    live_cutoff = now - _td(days=max(1, int(live_window_days or 7)))
-
-    batch_keys = {str(k) for k in (live_batch_keys or []) if k}
-    if not batch_keys:
-        try:
-            from src.data_pipeline import load_live_batch_keys
-
-            batch_keys = set(load_live_batch_keys())
-        except Exception:
-            batch_keys = set()
+    # live_window_days / live_batch_keys kept for API compatibility (unused for split)
+    _ = (live_window_days, live_batch_keys)
 
     platform_set = {str(p).lower() for p in (platforms or []) if p}
     rating_set = set()
@@ -716,17 +713,16 @@ def fetch_reviews_filtered(
             or _parse_iso(row.get("fetched_at"))
             or _parse_iso(row.get("created_at"))
         )
-        chash = str(row.get("content_hash") or "")
-        in_live_batch = bool(chash and chash in batch_keys)
-        is_live = in_live_batch or bool(event_dt and event_dt >= live_cutoff)
+        cal = parse_review_date(row.get("date") or row.get("review_date") or event_dt)
+        is_live = is_live_date(cal)
+        is_hist = is_historical_date(cal)
 
-        if mode == "live":
-            if batch_keys:
-                if not in_live_batch:
-                    continue
-            elif not (event_dt and event_dt >= live_cutoff):
-                continue
-        # historical + combined → keep all stored rows (subject to other filters)
+        if mode == "historical" and not is_hist:
+            continue
+        if mode == "live" and not is_live:
+            continue
+        if mode == "combined" and not is_combined_date(cal):
+            continue
 
         if range_cutoff is not None:
             if not event_dt or event_dt < range_cutoff:
@@ -755,6 +751,7 @@ def fetch_reviews_filtered(
         enriched["review_date"] = row.get("date")
         enriched["version"] = row.get("app_version")
         enriched["is_live"] = is_live
+        enriched["is_historical"] = is_hist
         out.append(enriched)
     if limit is not None:
         return out[: int(limit)]
@@ -766,19 +763,28 @@ def get_review_warehouse_stats(
     *,
     live_window_days: int = 7,
 ) -> dict[str, Any]:
-    """KPIs for Historical / Live / Merged warehouse dashboard."""
+    """KPIs for Historical / Live / Merged warehouse dashboard (fixed date bounds)."""
     from datetime import timedelta
 
+    from src.review_dates import (
+        historical_range_label,
+        is_historical_date,
+        is_live_date,
+        live_range_label,
+        parse_review_date,
+    )
+
     now = datetime.now(timezone.utc)
-    live_cutoff = now - timedelta(days=max(1, int(live_window_days or 7)))
     today_cutoff = now - timedelta(days=1)
     week_cutoff = now - timedelta(days=7)
 
     rows = fetch_all_reviews(limit=None, db_path=db_path)
+    historical = 0
     live = 0
     new_today = 0
     new_week = 0
     latest_review: datetime | None = None
+    latest_live_date = None
     last_sync: datetime | None = None
 
     for row in rows:
@@ -787,13 +793,18 @@ def get_review_warehouse_stats(
             or _parse_iso(row.get("fetched_at"))
             or _parse_iso(row.get("created_at"))
         )
+        cal = parse_review_date(row.get("date") or row.get("review_date") or event_dt)
         fetched = (
             _parse_iso(row.get("fetched_at"))
             or _parse_iso(row.get("created_at"))
             or _parse_iso(row.get("updated_at"))
         )
-        if event_dt and event_dt >= live_cutoff:
+        if is_historical_date(cal):
+            historical += 1
+        if is_live_date(cal):
             live += 1
+            if cal is not None and (latest_live_date is None or cal > latest_live_date):
+                latest_live_date = cal
         if fetched and fetched >= today_cutoff:
             new_today += 1
         if fetched and fetched >= week_cutoff:
@@ -803,7 +814,6 @@ def get_review_warehouse_stats(
         if fetched and (last_sync is None or fetched > last_sync):
             last_sync = fetched
 
-    # Prefer pipeline / live meta timestamp when available
     try:
         from src.data_pipeline import get_live_meta
 
@@ -813,16 +823,29 @@ def get_review_warehouse_stats(
     except Exception:
         pass
 
-    total = len(rows)
-    older = max(0, total - live)
+    next_refresh = None
+    try:
+        from src.review_sync import get_refresh_status
+
+        next_refresh = get_refresh_status().get("next_refresh_at")
+    except Exception:
+        pass
+
+    merged = historical + live  # disjoint date ranges; no overlap
     return {
-        "total_historical": total,  # full warehouse (never deleted)
+        "total_historical": historical,
         "total_live": live,
-        "older_reviews": older,
-        "merged_reviews": total,
+        "older_reviews": historical,
+        "merged_reviews": merged,
         "new_reviews_today": new_today,
         "new_reviews_this_week": new_week,
         "last_sync_time": last_sync.isoformat() if last_sync else None,
+        "next_refresh_time": next_refresh,
         "latest_review_date": latest_review.isoformat() if latest_review else None,
+        "latest_live_review_date": (
+            latest_live_date.isoformat() if latest_live_date else None
+        ),
+        "historical_date_range": historical_range_label(),
+        "live_date_range": live_range_label(latest_live_date),
         "live_window_days": live_window_days,
     }

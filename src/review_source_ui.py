@@ -162,9 +162,9 @@ def render_visible_reviews_table(
     st.markdown("---")
     st.header("Visible Reviews")
     captions = {
-        "historical": "Historical Reviews — loaded from the local database (no live fetch)",
-        "live": "Live Reviews — newly fetched from Google Play & App Store",
-        "combined": "Historical + Live Reviews — merged and deduplicated",
+        "historical": "Historical Reviews — 01 Apr 2026 → 05 Jul 2026 (inclusive)",
+        "live": "Live Reviews — 06 Jul 2026 → Latest Available Review (auto-updates)",
+        "combined": "Historical + Live Reviews — merged & deduplicated",
     }
     st.caption(captions.get(data_source, "Reviews"))
 

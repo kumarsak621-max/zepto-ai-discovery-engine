@@ -219,12 +219,15 @@ div[data-testid="stMetric"] {
     with st.container():
         w1 = st.columns(3)
         w1[0].metric(
-            "Total Historical Reviews",
-            f"{int(warehouse.get('total_historical') or stats.get('total') or 0):,}",
+            "Historical Review Count",
+            f"{int(warehouse.get('total_historical') or 0):,}",
         )
-        w1[1].metric("Total Live Reviews", f"{int(warehouse.get('total_live') or 0):,}")
+        w1[1].metric(
+            "Live Review Count",
+            f"{int(warehouse.get('total_live') or 0):,}",
+        )
         w1[2].metric(
-            "Merged Reviews",
+            "Merged Review Count",
             f"{int(warehouse.get('merged_reviews') or stats.get('total') or 0):,}",
         )
         w2 = st.columns(3)
@@ -241,8 +244,31 @@ div[data-testid="stMetric"] {
                 or live_meta.get("last_updated")
             ),
         )
+        w3 = st.columns(3)
+        w3[0].metric(
+            "Latest Live Review Date",
+            _format_last_updated(
+                warehouse.get("latest_live_review_date")
+                or warehouse.get("latest_review_date")
+            ),
+        )
+        w3[1].metric(
+            "Historical Date Range",
+            str(warehouse.get("historical_date_range") or "01 Apr 2026 → 05 Jul 2026"),
+        )
+        w3[2].metric(
+            "Live Date Range",
+            str(warehouse.get("live_date_range") or "06 Jul 2026 → Latest"),
+        )
         st.caption(
+            f"Next Refresh Time: {_format_last_updated(warehouse.get('next_refresh_time') or refresh.get('next_refresh_at'))} · "
             f"Latest Review Date: {_format_last_updated(warehouse.get('latest_review_date'))}"
+        )
+        # Keep prior warehouse labels for continuity
+        st.caption(
+            f"Total Historical Reviews: {int(warehouse.get('total_historical') or 0):,} · "
+            f"Total Live Reviews: {int(warehouse.get('total_live') or 0):,} · "
+            f"Merged Reviews: {int(warehouse.get('merged_reviews') or 0):,}"
         )
 
     with st.container():

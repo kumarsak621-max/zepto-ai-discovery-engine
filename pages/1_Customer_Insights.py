@@ -199,7 +199,8 @@ _source_label = {
     "combined": "Historical + Live Reviews",
 }.get(data_source, "Historical + Live Reviews")
 st.caption(
-    f"Warehouse · Historical: **{_hc:,}** · Live batch/window: **{_lc:,}** · "
+    f"Warehouse · Historical (01 Apr–05 Jul 2026): **{_hc:,}** · "
+    f"Live (06 Jul 2026→latest): **{_lc:,}** · "
     f"Merged: **{_mc:,}** · Loaded for analysis: **{len(reviews):,}** "
     f"({_source_label})"
 )
@@ -260,9 +261,9 @@ def _section_warehouse() -> None:
     st.markdown("---")
     st.header("Live Dashboard")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Total Historical Reviews", f"{int(warehouse.get('total_historical') or 0):,}")
-    c2.metric("Total Live Reviews", f"{int(warehouse.get('total_live') or 0):,}")
-    c3.metric("Merged Reviews", f"{int(warehouse.get('merged_reviews') or 0):,}")
+    c1.metric("Historical Review Count", f"{int(warehouse.get('total_historical') or 0):,}")
+    c2.metric("Live Review Count", f"{int(warehouse.get('total_live') or 0):,}")
+    c3.metric("Merged Review Count", f"{int(warehouse.get('merged_reviews') or 0):,}")
     c4, c5, c6 = st.columns(3)
     c4.metric("New Reviews Today", f"{int(warehouse.get('new_reviews_today') or 0):,}")
     c5.metric("New Reviews This Week", f"{int(warehouse.get('new_reviews_this_week') or 0):,}")
@@ -270,9 +271,30 @@ def _section_warehouse() -> None:
         "Last Sync Time",
         format_last_updated(warehouse.get("last_sync_time") or _refresh.get("last_sync_at")),
     )
+    c7, c8, c9 = st.columns(3)
+    c7.metric(
+        "Latest Live Review Date",
+        format_last_updated(
+            warehouse.get("latest_live_review_date") or warehouse.get("latest_review_date")
+        ),
+    )
+    c8.metric(
+        "Historical Date Range",
+        str(warehouse.get("historical_date_range") or "01 Apr 2026 → 05 Jul 2026"),
+    )
+    c9.metric(
+        "Live Date Range",
+        str(warehouse.get("live_date_range") or "06 Jul 2026 → Latest"),
+    )
     st.caption(
-        f"Latest Review Date: **{format_last_updated(warehouse.get('latest_review_date'))}** · "
-        f"Live window: last {warehouse.get('live_window_days', 7)} days"
+        f"Next Refresh Time: **{format_last_updated(warehouse.get('next_refresh_time') or _refresh.get('next_refresh_at'))}** · "
+        f"Latest Review Date: **{format_last_updated(warehouse.get('latest_review_date'))}**"
+    )
+    # Continuity labels
+    st.caption(
+        f"Total Historical Reviews: {int(warehouse.get('total_historical') or 0):,} · "
+        f"Total Live Reviews: {int(warehouse.get('total_live') or 0):,} · "
+        f"Merged Reviews: {int(warehouse.get('merged_reviews') or 0):,}"
     )
 
 
@@ -291,8 +313,8 @@ def _section_ai_analysis() -> None:
     }.get(data_source, "AI Analysis")
     st.header(analysis_title)
     mode_label = {
-        "historical": "Historical Reviews only",
-        "live": "Live Reviews only",
+        "historical": "Historical Reviews only (01 Apr 2026 → 05 Jul 2026)",
+        "live": "Live Reviews only (06 Jul 2026 → Latest Available Review)",
         "combined": "Historical + Live Reviews (merged)",
     }.get(data_source, "Merged Reviews")
     st.caption(f"Gemini / evidence analysis for: **{mode_label}**")

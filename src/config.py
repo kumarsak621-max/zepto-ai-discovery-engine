@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import date as _date
 
 from dotenv import load_dotenv
 
@@ -133,10 +134,28 @@ APPSTORE_ENABLED = _env_str("APPSTORE_ENABLED", "1").lower() not in {
 
 DAILY_SCHEDULE_HOUR = _env_int("DAILY_SCHEDULE_HOUR", 6)
 LIVE_CACHE_TTL_HOURS = _env_int("LIVE_CACHE_TTL_HOURS", 6)
-# Reviews with review_date within this window count as "Live"
+# Legacy rolling window (kept for backward compatibility; date split uses fixed bounds below)
 LIVE_REVIEW_WINDOW_DAYS = _env_int("LIVE_REVIEW_WINDOW_DAYS", 7)
 # Auto-check for new store reviews every N minutes while the app is open
 AUTO_REFRESH_MINUTES = _env_int("AUTO_REFRESH_MINUTES", 30)
+
+# Fixed Review Source date bounds (calendar dates, inclusive where noted)
+# Historical: 01 Apr 2026 → 05 Jul 2026 (inclusive)
+# Live:       06 Jul 2026 → latest available (no end date)
+def _env_date(name: str, default: _date) -> _date:
+    raw = _secret_or_env(name, "")
+    if not raw:
+        return default
+    try:
+        return _date.fromisoformat(str(raw).strip()[:10])
+    except ValueError:
+        logger.warning("Invalid date for %s=%r — using default %s", name, raw, default)
+        return default
+
+
+HISTORICAL_START_DATE = _env_date("HISTORICAL_START_DATE", _date(2026, 4, 1))
+HISTORICAL_END_DATE = _env_date("HISTORICAL_END_DATE", _date(2026, 7, 5))
+LIVE_START_DATE = _env_date("LIVE_START_DATE", _date(2026, 7, 6))
 
 REVIEWS_CSV_PATH = DATA_DIR / "reviews.csv"
 LIVE_META_PATH = DATA_DIR / "live_reviews_meta.json"

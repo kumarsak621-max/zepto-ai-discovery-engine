@@ -12,12 +12,18 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from src.config import LIVE_REVIEW_WINDOW_DAYS
+from src.config import (
+    HISTORICAL_END_DATE,
+    HISTORICAL_START_DATE,
+    LIVE_REVIEW_WINDOW_DAYS,
+    LIVE_START_DATE,
+)
 from src.database import (
     fetch_reviews_filtered,
     get_pm_insights,
     get_review_warehouse_stats,
 )
+from src.review_dates import historical_range_label, live_range_label
 
 logger = logging.getLogger(__name__)
 
@@ -444,6 +450,11 @@ def build_filtered_dashboard(
         "sentiments": sentiments or [],
         "review_count": len(reviews),
         "live_window_days": LIVE_REVIEW_WINDOW_DAYS,
+        "historical_date_range": historical_range_label(),
+        "live_date_range": live_range_label(),
+        "historical_start": HISTORICAL_START_DATE.isoformat(),
+        "historical_end": HISTORICAL_END_DATE.isoformat(),
+        "live_start": LIVE_START_DATE.isoformat(),
     }
     # Refresh KPIs for filtered set
     base["review_kpis"] = {
