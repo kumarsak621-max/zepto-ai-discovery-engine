@@ -156,6 +156,14 @@ div[data-testid="stMetric"] {
 
     render_auto_collect_warning()
 
+    # Incremental AI: analyze only newly collected (unanalyzed) reviews once/session
+    from src.ai_intelligence_ui import (
+        ensure_incremental_ai_analysis,
+        render_ai_intelligence_section,
+    )
+
+    ensure_incremental_ai_analysis(batch_size=100)
+
     header_l, header_r = st.columns([3, 1])
     with header_r:
         refresh = st.button(
@@ -173,6 +181,7 @@ div[data-testid="stMetric"] {
 
             result = _reload(force=True)
             clear_data_caches()
+            st.session_state.pop("_ai_incremental_done", None)
         if result.get("status") == "success":
             st.success("Reviews refreshed and analysis updated.")
         else:
@@ -185,15 +194,29 @@ div[data-testid="stMetric"] {
         stats = cached_collection_stats()
         insights = cached_pm_insights(limit=2000)
         live_meta = get_live_meta() or {}
-        from src.streamlit_cache import cached_warehouse_stats
+        from src.streamlit_cache import cached_discovery_dashboard, cached_warehouse_stats
         from src.review_sync import get_refresh_status
 
         warehouse = cached_warehouse_stats()
         refresh = get_refresh_status()
+        try:
+            discovery_dash = cached_discovery_dashboard(limit=2000) or {}
+            discovery = discovery_dash.get("discovery") or {}
+        except Exception:
+            discovery = {}
     except Exception as exc:
         st.error(f"Could not load dashboard metrics right now. Details: {exc}")
         stats, insights, live_meta = {"total": 0, "by_sentiment": {}}, {}, {}
-        warehouse, refresh = {}, {}
+        warehouse, refresh, discovery = {}, {}, {}
+
+    # Prominent AI intelligence hero (additive — does not replace existing KPIs)
+    render_ai_intelligence_section(
+        stats=stats,
+        insights=insights,
+        discovery=discovery,
+        live_meta=live_meta,
+        processing=False,
+    )
 
     by_sentiment = stats.get("by_sentiment") or {}
     positive = int(by_sentiment.get("Positive") or 0)

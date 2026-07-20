@@ -404,15 +404,34 @@ def get_collection_stats(db_path: Path | None = None) -> dict[str, Any]:
             """
         ).fetchall()
 
+        analyzed_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM reviews WHERE analyzed = 1"
+        ).fetchone()["c"]
+        pending_analysis = conn.execute(
+            "SELECT COUNT(*) AS c FROM reviews WHERE analyzed = 0 OR analyzed IS NULL"
+        ).fetchone()["c"]
+        last_analyzed_row = conn.execute(
+            """
+            SELECT MAX(updated_at) AS last_ai
+            FROM reviews
+            WHERE analyzed = 1
+            """
+        ).fetchone()
+
     avg_rating = avg_row["avg_rating"] if avg_row else None
     return {
         "total": total,
+        "analyzed_count": int(analyzed_count or 0),
+        "pending_analysis": int(pending_analysis or 0),
         "by_source": by_source,
         "by_sentiment": by_sentiment,
         "by_theme": by_theme,
         "avg_rating": float(avg_rating) if avg_rating is not None else None,
         "rated_count": int(avg_row["rated_count"] or 0) if avg_row else 0,
         "last_update": last_row["last_update"] if last_row else None,
+        "last_ai_analysis": (
+            last_analyzed_row["last_ai"] if last_analyzed_row else None
+        ),
         "last_run": dict(last_run) if last_run else None,
         "top_complaints": [{"theme": r["theme"], "count": r["c"]} for r in complaints],
     }
