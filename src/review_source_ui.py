@@ -1,7 +1,7 @@
 """
-Shared Review Source controls — selector, filters, visible table, export.
+Shared Review Source controls — selector, keyword search, visible table, export.
 
-Review Source options: Live Reviews | All Reviews (Historical removed).
+Review Source options: Live Reviews | All Reviews.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from typing import Any
 import streamlit as st
 
 from src.review_viewer import (
+    MAX_DISPLAY_REVIEWS_PER_DAY,
     dataframe_to_csv_bytes,
     dataframe_to_excel_bytes,
     filter_by_keyword,
@@ -30,22 +31,6 @@ SOURCE_MAP = {
     "Historical Reviews": "all",
     "Historical + Live Reviews": "all",
     "Historical + Live": "all",
-}
-
-DATE_OPTIONS = [
-    "All Time",
-    "Last 24 Hours",
-    "Last 7 Days",
-    "Last 30 Days",
-    "Last 90 Days",
-]
-
-DATE_MAP = {
-    "All Time": "all",
-    "Last 24 Hours": "24h",
-    "Last 7 Days": "7d",
-    "Last 30 Days": "30d",
-    "Last 90 Days": "90d",
 }
 
 _LEGACY_LABELS = {
@@ -74,59 +59,31 @@ def render_review_source_selector(*, key_prefix: str = "ci") -> str:
 
 
 def render_review_filters(*, key_prefix: str = "ci") -> dict[str, Any]:
-    """Render date/platform/rating/sentiment/keyword filters."""
-    with st.expander("Filters", expanded=True):
-        st.caption(
-            "Live Reviews = 06 Jul 2026 onward · All Reviews = full merged warehouse. "
-            "Use Date Range = All Time to see the complete selected source."
-        )
-        f1, f2, f3, f4 = st.columns(4)
-        with f1:
-            date_range_label = st.selectbox(
-                "Date Range",
-                DATE_OPTIONS,
-                key=f"{key_prefix}_date_range",
-            )
-        with f2:
-            platform_label = st.selectbox(
-                "Platform",
-                ["Both", "Google Play", "Apple Store"],
-                key=f"{key_prefix}_platform",
-            )
-        with f3:
-            rating_sel = st.multiselect(
-                "Rating",
-                options=[1, 2, 3, 4, 5],
-                default=[],
-                format_func=lambda x: f"{x}★",
-                key=f"{key_prefix}_ratings",
-            )
-        with f4:
-            sentiment_sel = st.multiselect(
-                "Sentiment",
-                options=["Positive", "Neutral", "Negative"],
-                default=[],
-                key=f"{key_prefix}_sentiments",
-            )
-        keyword = st.text_input(
-            "Keyword Search",
-            value="",
-            placeholder="Search review text instantly…",
-            key=f"{key_prefix}_keyword_search",
-        )
+    """
+    Keyword search only.
+
+    Date / Platform / Rating / Sentiment filter controls were removed from the UI.
+    Underlying data still loads in full for the selected Review Source (live|all).
+    """
+    st.caption(
+        "Zepto product reviews from Google Play and Apple App Store. "
+        "Live Reviews = 06 Jul 2026 onward · All Reviews = full merged warehouse."
+    )
+    keyword = st.text_input(
+        "Search reviews",
+        value="",
+        placeholder="Search review text or reviewer name…",
+        key=f"{key_prefix}_keyword_search",
+    )
 
     return {
-        "date_range": DATE_MAP.get(date_range_label, "all"),
-        "platform": {
-            "Both": "both",
-            "Google Play": "playstore",
-            "Apple Store": "appstore",
-        }.get(platform_label, "both"),
-        "ratings": list(rating_sel),
-        "sentiments": list(sentiment_sel),
+        "date_range": "all",
+        "platform": "both",
+        "ratings": [],
+        "sentiments": [],
         "keyword": keyword,
-        "ratings_key": ",".join(str(r) for r in sorted(rating_sel)) if rating_sel else "",
-        "sentiments_key": "|".join(sentiment_sel) if sentiment_sel else "",
+        "ratings_key": "",
+        "sentiments_key": "",
     }
 
 
@@ -143,7 +100,7 @@ def ensure_source_data_loaded(data_source: str, *, key_prefix: str = "ci") -> No
     if mode == "live":
         if st.session_state.get(mode_key) != "live":
             try:
-                with st.spinner("Fetching newest Google Play and App Store reviews…"):
+                with st.spinner("Fetching newest Zepto Google Play and App Store reviews…"):
                     ensure_live_reviews_loaded(force=True)
                     clear_data_caches()
             except Exception as exc:
@@ -163,22 +120,38 @@ def render_visible_reviews_table(
     keyword: str = "",
     key_prefix: str = "ci",
 ) -> list[dict[str, Any]]:
-    """Render interactive Visible Reviews table + CSV/Excel export."""
-    visible = filter_by_keyword(reviews, keyword)
+    """
+    Render interactive Visible Reviews table + CSV/Excel export.
+
+    `reviews` is the full selected-source dataset (AI/dashboard use this elsewhere).
+    Only the table/export apply a display cap of 5 reviews per calendar date.
+    """
+    matched = filter_by_keyword(reviews, keyword)
+
     st.markdown("---")
     st.header("Visible Reviews")
     captions = {
-        "live": "Live Reviews — 06 Jul 2026 to Latest Available Review (auto-updates)",
-        "all": "All Reviews — full merged warehouse (deduplicated)",
-        "combined": "All Reviews — full merged warehouse (deduplicated)",
+        "live": "Zepto Live Reviews — 06 Jul 2026 to Latest Available Review (auto-updates)",
+        "all": "All Zepto Reviews — full merged warehouse (deduplicated)",
+        "combined": "All Zepto Reviews — full merged warehouse (deduplicated)",
     }
-    st.caption(captions.get(str(data_source).lower(), "Reviews"))
+    st.caption(captions.get(str(data_source).lower(), "Zepto product reviews"))
+    st.info(
+        "Showing up to 5 reviews per day. AI analysis and dashboard metrics are based "
+        "on the complete review dataset."
+    )
 
-    display_df = reviews_to_display_df(visible, data_source=data_source)
-    st.metric("Reviews shown", f"{len(display_df):,}")
+    display_df = reviews_to_display_df(
+        matched,
+        data_source=data_source,
+        max_per_day=MAX_DISPLAY_REVIEWS_PER_DAY,
+    )
+    m1, m2 = st.columns(2)
+    m1.metric("Reviews in dataset (selected source)", f"{len(reviews):,}")
+    m2.metric("Reviews shown in table", f"{len(display_df):,}")
     if display_df.empty:
-        st.info("No reviews match the current filters or keyword search.")
-        return visible
+        st.info("No reviews match the current keyword search.")
+        return matched
 
     st.dataframe(
         display_df,
@@ -186,13 +159,12 @@ def render_visible_reviews_table(
         hide_index=True,
         height=min(560, 80 + min(len(display_df), 18) * 35),
         column_config={
-            "Date": st.column_config.TextColumn("Date", width="small"),
+            "Review Date": st.column_config.TextColumn("Review Date", width="small"),
             "Platform": st.column_config.TextColumn("Platform", width="small"),
             "Rating": st.column_config.NumberColumn("Rating", format="%.1f", width="small"),
             "Review Text": st.column_config.TextColumn("Review Text", width="large"),
             "Sentiment": st.column_config.TextColumn("Sentiment", width="small"),
-            "Reviewer": st.column_config.TextColumn("Reviewer", width="medium"),
-            "Source": st.column_config.TextColumn("Source", width="small"),
+            "Reviewer Name": st.column_config.TextColumn("Reviewer Name", width="medium"),
         },
     )
 
@@ -222,4 +194,5 @@ def render_visible_reviews_table(
             )
         except Exception as exc:
             st.warning(f"Excel export unavailable: {exc}")
-    return visible
+    # Return full keyword-matched set (not display-capped)
+    return matched

@@ -1,5 +1,8 @@
 """
 Review viewing helpers — display table, keyword search, and CSV/Excel export.
+
+Display-only: at most MAX_DISPLAY_REVIEWS_PER_DAY rows per calendar date.
+Storage / AI / dashboard always keep the full review set.
 """
 
 from __future__ import annotations
@@ -10,6 +13,9 @@ from typing import Any
 
 import pandas as pd
 
+# Visible table only — never applied to DB storage or AI/dashboard payloads
+MAX_DISPLAY_REVIEWS_PER_DAY = 5
+
 
 def _platform_label(source: Any) -> str:
     key = str(source or "").strip().lower()
@@ -18,20 +24,6 @@ def _platform_label(source: Any) -> str:
     if key in {"appstore", "apple app store", "app_store", "ios", "apple"}:
         return "Apple App Store"
     return str(source or "Unknown").replace("_", " ").title()
-
-
-def _review_source_label(row: dict[str, Any], *, data_source: str) -> str:
-    """Label each row Live vs Stored using review_date only."""
-    from src.review_dates import classify_review_date, parse_review_date
-
-    cal = parse_review_date(row.get("date") or row.get("review_date"))
-    label = classify_review_date(cal)
-    if label == "Live":
-        return "Live"
-    mode = str(data_source or "all").lower()
-    if mode == "live":
-        return "Live"
-    return "All"
 
 
 def _format_date(value: Any) -> str:
@@ -49,42 +41,84 @@ def _format_date(value: Any) -> str:
         return raw[:16]
 
 
+def _review_sort_key(row: dict[str, Any]) -> tuple:
+    """Newest first within a day (ISO timestamp descending)."""
+    raw = str(row.get("date") or row.get("review_date") or "")
+    return (raw,)
+
+
+def limit_reviews_for_display(
+    reviews: list[dict[str, Any]],
+    *,
+    max_per_day: int = MAX_DISPLAY_REVIEWS_PER_DAY,
+) -> list[dict[str, Any]]:
+    """
+    Cap visible rows at `max_per_day` per calendar date.
+
+    Does not mutate or delete the input list — returns a new list for UI only.
+    """
+    if not reviews or max_per_day <= 0:
+        return list(reviews or [])
+
+    from src.review_dates import parse_review_date
+
+    # Newest dates first overall; within a day keep first N after newest-first sort
+    ordered = sorted(reviews, key=_review_sort_key, reverse=True)
+    per_day: dict[Any, int] = {}
+    out: list[dict[str, Any]] = []
+    for row in ordered:
+        cal = parse_review_date(row.get("date") or row.get("review_date"))
+        key = cal.isoformat() if cal is not None else "__unknown__"
+        used = per_day.get(key, 0)
+        if used >= max_per_day:
+            continue
+        per_day[key] = used + 1
+        out.append(row)
+    return out
+
+
 def reviews_to_display_df(
     reviews: list[dict[str, Any]],
     *,
     data_source: str = "all",
+    max_per_day: int | None = MAX_DISPLAY_REVIEWS_PER_DAY,
 ) -> pd.DataFrame:
-    """Build the interactive Visible Reviews table."""
+    """Build the interactive Visible Reviews table (display-capped per day)."""
+    _ = data_source  # kept for call-site compatibility
     cols = [
-        "Date",
+        "Review Date",
         "Platform",
         "Rating",
         "Review Text",
         "Sentiment",
-        "Reviewer",
-        "Source",
+        "Reviewer Name",
     ]
     if not reviews:
         return pd.DataFrame(columns=cols)
 
+    display_rows = (
+        limit_reviews_for_display(reviews, max_per_day=max_per_day)
+        if max_per_day is not None
+        else list(reviews)
+    )
+
     rows = []
-    for r in reviews:
+    for r in display_rows:
         text = r.get("text") or r.get("review_text") or ""
         name = (
             r.get("reviewer_name")
-            or r.get("title")
             or r.get("userName")
+            or r.get("user_name")
             or ""
         )
         rows.append(
             {
-                "Date": _format_date(r.get("date") or r.get("review_date")),
+                "Review Date": _format_date(r.get("date") or r.get("review_date")),
                 "Platform": _platform_label(r.get("source")),
                 "Rating": r.get("rating"),
                 "Review Text": str(text),
                 "Sentiment": (r.get("sentiment") or "—"),
-                "Reviewer": str(name).strip() or "—",
-                "Source": _review_source_label(r, data_source=data_source),
+                "Reviewer Name": str(name).strip() or "—",
             }
         )
     return pd.DataFrame(rows)

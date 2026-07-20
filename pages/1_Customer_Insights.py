@@ -198,9 +198,9 @@ st.caption(
 
 if not isinstance(reviews, list) or not reviews:
     st.warning(
-        "No reviews match the current filters (or the warehouse is empty). "
-        "Try **All Reviews**, set Date Range to **All Time**, or switch to "
-        "**Live Reviews** to fetch from Google Play and the App Store."
+        "No reviews match the current search (or the warehouse is empty). "
+        "Try **All Reviews** or switch to **Live Reviews** to fetch from Google Play "
+        "and the App Store."
     )
     st.stop()
 
