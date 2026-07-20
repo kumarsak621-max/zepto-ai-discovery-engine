@@ -2,7 +2,8 @@
 Automatic review collection on Streamlit app startup.
 
 Collects Google Play + App Store reviews via the existing pipeline,
-merges/dedupes, stores in SQLite, and runs Gemini analysis — once per session.
+merges/dedupes, stores in SQLite (append-only), and runs Gemini analysis.
+Also re-checks for new reviews every AUTO_REFRESH_MINUTES (default 30).
 """
 
 from __future__ import annotations
@@ -27,32 +28,37 @@ FALLBACK_WARNING = (
 
 def ensure_live_reviews_loaded(*, force: bool = False) -> dict[str, Any]:
     """
-    Ensure live reviews are collected and analyzed for this browser session.
+    Ensure live reviews are collected and analyzed.
 
-    - Runs at most once per session (unless force=True).
+    - Runs on startup and again every AUTO_REFRESH_MINUTES.
     - Uses existing Play Store / App Store collectors + Gemini pipeline.
+    - Inserts only NEW reviews into the historical warehouse (no deletes).
     - On failure: leaves prior SQLite data in place and sets a friendly warning.
     """
-    if not force and st.session_state.get(_SESSION_DONE):
+    from src.review_sync import ensure_reviews_synced, get_refresh_status, should_auto_refresh
+
+    # Periodic refresh while the session is open
+    needs_refresh = force or should_auto_refresh(force=False)
+    if not force and st.session_state.get(_SESSION_DONE) and not needs_refresh:
         return st.session_state.get(_SESSION_RESULT) or {}
 
     result: dict[str, Any] = {"status": "skipped"}
     warning = ""
 
     try:
-        from src.data_pipeline import run_live_review_analysis
         from src.database import get_collection_stats
 
         with st.spinner(
             "Automatically collecting reviews from Google Play and App Store…"
         ):
-            result = run_live_review_analysis(force_refresh=force)
+            result = ensure_reviews_synced(force=force or needs_refresh)
 
         if result.get("status") == "success":
             clear_data_caches()
             warning = ""
+        elif result.get("status") == "skipped":
+            warning = ""
         else:
-            # Keep prior analyzed data; surface a non-fatal warning
             stats = get_collection_stats()
             if int(stats.get("total") or 0) > 0:
                 warning = FALLBACK_WARNING
@@ -80,6 +86,12 @@ def ensure_live_reviews_loaded(*, force: bool = False) -> dict[str, Any]:
     st.session_state[_SESSION_DONE] = True
     st.session_state[_SESSION_RESULT] = result
     st.session_state[_SESSION_WARNING] = warning
+    # Expose refresh clocks for UI badges
+    try:
+        status = get_refresh_status()
+        st.session_state["_refresh_status"] = status
+    except Exception:
+        pass
     return result
 
 
@@ -92,16 +104,23 @@ def render_auto_collect_warning() -> None:
 
 def render_auto_status_sidebar() -> None:
     """Compact sidebar status (no upload / no manual run buttons)."""
-    from src.config import PLAYSTORE_APP_ID, has_appstore
+    from src.config import AUTO_REFRESH_MINUTES, PLAYSTORE_APP_ID, has_appstore
     from src.data_pipeline import get_live_meta
+    from src.review_sync import get_refresh_status
     from src.streamlit_playstore import format_last_updated
 
     st.sidebar.markdown("---")
     st.sidebar.caption("**Live data** · auto-collected on startup")
     meta = get_live_meta()
+    refresh = get_refresh_status()
     st.sidebar.caption(
-        f"Last Updated: **{format_last_updated(meta.get('last_updated'))}**"
+        f"Last Updated: **{format_last_updated(refresh.get('last_sync_at') or meta.get('last_updated'))}**"
     )
+    st.sidebar.caption(
+        f"Next Refresh: **{format_last_updated(refresh.get('next_refresh_at'))}** "
+        f"(every {AUTO_REFRESH_MINUTES} min)"
+    )
+    st.sidebar.caption(refresh.get("relative") or "")
     st.sidebar.caption(
         f"Play: {meta.get('playstore_count', 0)} · "
         f"App Store: {meta.get('appstore_count', 0)} · "

@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS reviews (
     content_hash TEXT UNIQUE,
     analyzed INTEGER DEFAULT 0,
     embedded INTEGER DEFAULT 0,
+    app_name TEXT,
+    reviewer_name TEXT,
+    country TEXT,
+    fetched_at TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -69,6 +73,10 @@ ADVANCED_COLUMNS = {
     "pain_point": "TEXT",
     "root_cause": "TEXT",
     "product_opportunity": "TEXT",
+    "app_name": "TEXT",
+    "reviewer_name": "TEXT",
+    "country": "TEXT",
+    "fetched_at": "TEXT",
 }
 
 
@@ -105,6 +113,20 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_reviews_segment ON reviews(customer_segment)"
     )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_reviews_fetched_at ON reviews(fetched_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_reviews_created_at ON reviews(created_at)"
+    )
+    # Backfill fetched_at from created_at for older rows (never delete historical data)
+    conn.execute(
+        """
+        UPDATE reviews
+        SET fetched_at = COALESCE(fetched_at, created_at, updated_at)
+        WHERE fetched_at IS NULL OR fetched_at = ''
+        """
+    )
 
     # pipeline_runs: replace legacy reddit_count with appstore/manual counts
     run_cols = {
@@ -132,14 +154,15 @@ def init_db(db_path: Path | None = None) -> Path:
 
 
 def upsert_review(review: dict[str, Any], db_path: Path | None = None) -> bool:
-    """Insert a review if it is not a duplicate. Returns True if inserted."""
-    text = (review.get("text") or "").strip()
+    """Insert a review if it is not a duplicate. Returns True if inserted. Never updates/deletes."""
+    text = (review.get("text") or review.get("review_text") or "").strip()
     if not text:
         return False
 
     source = review.get("source", "unknown")
-    external_id = review.get("external_id")
+    external_id = review.get("external_id") or review.get("review_id")
     chash = review.get("content_hash") or content_hash(text, source, external_id)
+    now = datetime.now(timezone.utc).isoformat()
 
     fully_analyzed = bool(
         review.get("sentiment")
@@ -153,7 +176,7 @@ def upsert_review(review: dict[str, Any], db_path: Path | None = None) -> bool:
         "source": source,
         "text": text,
         "rating": review.get("rating"),
-        "date": review.get("date"),
+        "date": review.get("date") or review.get("review_date"),
         "category": review.get("category"),
         "sentiment": review.get("sentiment"),
         "theme": review.get("theme"),
@@ -163,14 +186,20 @@ def upsert_review(review: dict[str, Any], db_path: Path | None = None) -> bool:
         "pain_point": review.get("pain_point"),
         "root_cause": review.get("root_cause"),
         "product_opportunity": review.get("product_opportunity"),
-        "app_version": review.get("app_version"),
+        "app_version": review.get("app_version") or review.get("version"),
         "title": review.get("title"),
         "upvotes": review.get("upvotes"),
         "external_id": external_id,
         "content_hash": chash,
         "analyzed": 1 if fully_analyzed else 0,
         "embedded": 0,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "app_name": review.get("app_name") or "Zepto",
+        "reviewer_name": review.get("reviewer_name")
+        or review.get("userName")
+        or review.get("title"),
+        "country": review.get("country"),
+        "fetched_at": review.get("fetched_at") or now,
+        "updated_at": now,
     }
 
     with get_connection(db_path) as conn:
@@ -181,12 +210,14 @@ def upsert_review(review: dict[str, Any], db_path: Path | None = None) -> bool:
                     source, text, rating, date, category, sentiment, theme,
                     user_intent, review_summary, customer_segment, pain_point,
                     root_cause, product_opportunity, app_version, title, upvotes,
-                    external_id, content_hash, analyzed, embedded, updated_at
+                    external_id, content_hash, analyzed, embedded,
+                    app_name, reviewer_name, country, fetched_at, updated_at
                 ) VALUES (
                     :source, :text, :rating, :date, :category, :sentiment, :theme,
                     :user_intent, :review_summary, :customer_segment, :pain_point,
                     :root_cause, :product_opportunity, :app_version, :title, :upvotes,
-                    :external_id, :content_hash, :analyzed, :embedded, :updated_at
+                    :external_id, :content_hash, :analyzed, :embedded,
+                    :app_name, :reviewer_name, :country, :fetched_at, :updated_at
                 )
                 """,
                 payload,
@@ -387,17 +418,17 @@ def get_collection_stats(db_path: Path | None = None) -> dict[str, Any]:
     }
 
 
-def get_pm_insights(db_path: Path | None = None, limit: int = 2000) -> dict[str, Any]:
+def get_pm_insights(
+    db_path: Path | None = None,
+    limit: int = 2000,
+    reviews: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """
-    Aggregated Product Manager insights from advanced analysis fields:
+    Aggregated Product Manager insights from advanced analysis fields.
 
-    - Top customer problems (pain points)
-    - Most frequent themes
-    - Category exploration barriers
-    - User segments with highest exploration potential
-    - Recommended product opportunities
+    Pass `reviews` to aggregate a pre-filtered set (historical / live / combined).
     """
-    reviews = fetch_all_reviews(limit=limit, db_path=db_path)
+    reviews = reviews if reviews is not None else fetch_all_reviews(limit=limit, db_path=db_path)
     analyzed = [
         r
         for r in reviews
@@ -605,3 +636,181 @@ def clean_text(text: str) -> str:
         return ""
     cleaned = " ".join(text.replace("\u0000", " ").split())
     return cleaned.strip()
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        return None
+
+
+def fetch_reviews_filtered(
+    *,
+    data_source: str = "combined",
+    date_range: str = "all",
+    platforms: list[str] | None = None,
+    ratings: list[int] | None = None,
+    sentiments: list[str] | None = None,
+    live_window_days: int = 7,
+    limit: int | None = 5000,
+    db_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Query the historical warehouse with optional live/historical split and filters.
+
+    data_source: historical | live | combined
+    date_range: 24h | 7d | 30d | 90d | all
+    platforms: playstore / appstore
+    """
+    # Fetch a wide slice first, filter in Python, then apply limit.
+    # (Ordering by date DESC would otherwise starve "historical" when limit is small.)
+    fetch_cap = None if limit is None else max(int(limit) * 20, 5000)
+    rows = fetch_all_reviews(limit=fetch_cap, db_path=db_path)
+    now = datetime.now(timezone.utc)
+
+    # Date-range filter on review date (fallback fetched_at / created_at)
+    range_days = {"24h": 1, "7d": 7, "30d": 30, "90d": 90}.get(
+        str(date_range or "all").lower()
+    )
+    range_cutoff = None
+    if range_days is not None:
+        from datetime import timedelta
+
+        range_cutoff = now - timedelta(days=range_days)
+
+    from datetime import timedelta as _td
+
+    live_cutoff = now - _td(days=max(1, int(live_window_days or 7)))
+
+    platform_set = {str(p).lower() for p in (platforms or []) if p}
+    rating_set = set()
+    for r in ratings or []:
+        try:
+            rating_set.add(int(float(r)))
+        except (TypeError, ValueError):
+            continue
+    sentiment_set = {str(s).strip().title() for s in (sentiments or []) if s}
+
+    mode = str(data_source or "combined").lower()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        event_dt = (
+            _parse_iso(row.get("date"))
+            or _parse_iso(row.get("fetched_at"))
+            or _parse_iso(row.get("created_at"))
+        )
+        # Live = recent window; Historical = older warehouse slice; Combined = all
+        is_live = bool(event_dt and event_dt >= live_cutoff)
+        if mode == "live" and not is_live:
+            continue
+        if mode == "historical" and is_live:
+            continue
+
+        if range_cutoff is not None:
+            if not event_dt or event_dt < range_cutoff:
+                continue
+
+        src = str(row.get("source") or "").lower()
+        if platform_set and src not in platform_set:
+            continue
+
+        if rating_set:
+            try:
+                stars = int(round(float(row.get("rating"))))
+            except (TypeError, ValueError):
+                continue
+            if stars not in rating_set:
+                continue
+
+        if sentiment_set:
+            sent = str(row.get("sentiment") or "").strip().title()
+            if sent not in sentiment_set:
+                continue
+
+        # Canonical aliases for UI / export
+        enriched = dict(row)
+        enriched["review_id"] = row.get("external_id") or row.get("id")
+        enriched["review_text"] = row.get("text")
+        enriched["review_date"] = row.get("date")
+        enriched["version"] = row.get("app_version")
+        enriched["is_live"] = is_live
+        out.append(enriched)
+    if limit is not None:
+        return out[: int(limit)]
+    return out
+
+
+def get_review_warehouse_stats(
+    db_path: Path | None = None,
+    *,
+    live_window_days: int = 7,
+) -> dict[str, Any]:
+    """KPIs for Historical / Live / Merged warehouse dashboard."""
+    from datetime import timedelta
+
+    now = datetime.now(timezone.utc)
+    live_cutoff = now - timedelta(days=max(1, int(live_window_days or 7)))
+    today_cutoff = now - timedelta(days=1)
+    week_cutoff = now - timedelta(days=7)
+
+    rows = fetch_all_reviews(limit=None, db_path=db_path)
+    live = 0
+    new_today = 0
+    new_week = 0
+    latest_review: datetime | None = None
+    last_sync: datetime | None = None
+
+    for row in rows:
+        event_dt = (
+            _parse_iso(row.get("date"))
+            or _parse_iso(row.get("fetched_at"))
+            or _parse_iso(row.get("created_at"))
+        )
+        fetched = (
+            _parse_iso(row.get("fetched_at"))
+            or _parse_iso(row.get("created_at"))
+            or _parse_iso(row.get("updated_at"))
+        )
+        if event_dt and event_dt >= live_cutoff:
+            live += 1
+        if fetched and fetched >= today_cutoff:
+            new_today += 1
+        if fetched and fetched >= week_cutoff:
+            new_week += 1
+        if event_dt and (latest_review is None or event_dt > latest_review):
+            latest_review = event_dt
+        if fetched and (last_sync is None or fetched > last_sync):
+            last_sync = fetched
+
+    # Prefer pipeline / live meta timestamp when available
+    try:
+        from src.data_pipeline import get_live_meta
+
+        meta_ts = _parse_iso((get_live_meta() or {}).get("last_updated"))
+        if meta_ts:
+            last_sync = meta_ts
+    except Exception:
+        pass
+
+    total = len(rows)
+    older = max(0, total - live)
+    return {
+        "total_historical": total,  # full warehouse (never deleted)
+        "total_live": live,
+        "older_reviews": older,
+        "merged_reviews": total,
+        "new_reviews_today": new_today,
+        "new_reviews_this_week": new_week,
+        "last_sync_time": last_sync.isoformat() if last_sync else None,
+        "latest_review_date": latest_review.isoformat() if latest_review else None,
+        "live_window_days": live_window_days,
+    }

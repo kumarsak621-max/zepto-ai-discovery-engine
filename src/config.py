@@ -133,9 +133,14 @@ APPSTORE_ENABLED = _env_str("APPSTORE_ENABLED", "1").lower() not in {
 
 DAILY_SCHEDULE_HOUR = _env_int("DAILY_SCHEDULE_HOUR", 6)
 LIVE_CACHE_TTL_HOURS = _env_int("LIVE_CACHE_TTL_HOURS", 6)
+# Reviews with review_date within this window count as "Live"
+LIVE_REVIEW_WINDOW_DAYS = _env_int("LIVE_REVIEW_WINDOW_DAYS", 7)
+# Auto-check for new store reviews every N minutes while the app is open
+AUTO_REFRESH_MINUTES = _env_int("AUTO_REFRESH_MINUTES", 30)
 
 REVIEWS_CSV_PATH = DATA_DIR / "reviews.csv"
 LIVE_META_PATH = DATA_DIR / "live_reviews_meta.json"
+SYNC_META_PATH = DATA_DIR / "review_sync_meta.json"
 
 LIVE_CHAT_SOURCES = ("playstore", "appstore")
 

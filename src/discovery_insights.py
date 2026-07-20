@@ -754,7 +754,7 @@ def _normalize_gemini_payload(data: dict[str, Any], kpi_seeds: dict[str, float])
     }
 
 
-def _discovery_cache_key(insights: dict[str, Any]) -> str:
+def _discovery_cache_key(insights: dict[str, Any], *, mode: str = "") -> str:
     meta = get_live_meta() or {}
     return "|".join(
         [
@@ -762,6 +762,7 @@ def _discovery_cache_key(insights: dict[str, Any]) -> str:
             str(insights.get("analyzed_count") or 0),
             str(insights.get("total_reviews") or 0),
             str(insights.get("avg_rating") or ""),
+            str(mode or ""),
         ]
     )
 
@@ -868,7 +869,9 @@ def generate_gemini_discovery(
     if not reviews:
         return fallback
 
-    cache_key = _discovery_cache_key(insights)
+    cache_key = _discovery_cache_key(
+        insights, mode=str((insights or {}).get("_analysis_mode") or "")
+    )
     cached = _load_discovery_disk_cache(cache_key)
     if cached:
         return cached
@@ -973,6 +976,7 @@ def build_discovery_dashboard(
     reviews: list[dict[str, Any]] | None = None,
     *,
     limit: int = 2000,
+    analysis_mode: str = "combined",
 ) -> dict[str, Any]:
     """Full payload for the PM Discovery dashboard. Never raises to the UI layer."""
     from src.database import fetch_all_reviews
@@ -987,7 +991,10 @@ def build_discovery_dashboard(
         fetch_error = ""
 
     try:
-        insights = get_pm_insights(limit=limit) if reviews else {
+        insights = (
+            get_pm_insights(reviews=reviews, limit=limit)
+            if reviews
+            else {
             "analyzed_count": 0,
             "total_reviews": 0,
             "avg_rating": None,
@@ -1002,6 +1009,9 @@ def build_discovery_dashboard(
             "all_segments": [],
             "recommended_product_opportunities": [],
         }
+        )
+        if isinstance(insights, dict):
+            insights["_analysis_mode"] = analysis_mode
     except Exception as exc:
         logger.exception("get_pm_insights failed")
         insights = {

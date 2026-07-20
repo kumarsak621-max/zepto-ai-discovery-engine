@@ -185,9 +185,15 @@ div[data-testid="stMetric"] {
         stats = cached_collection_stats()
         insights = cached_pm_insights(limit=2000)
         live_meta = get_live_meta() or {}
+        from src.streamlit_cache import cached_warehouse_stats
+        from src.review_sync import get_refresh_status
+
+        warehouse = cached_warehouse_stats()
+        refresh = get_refresh_status()
     except Exception as exc:
         st.error(f"Could not load dashboard metrics right now. Details: {exc}")
         stats, insights, live_meta = {"total": 0, "by_sentiment": {}}, {}, {}
+        warehouse, refresh = {}, {}
 
     by_sentiment = stats.get("by_sentiment") or {}
     positive = int(by_sentiment.get("Positive") or 0)
@@ -204,6 +210,40 @@ div[data-testid="stMetric"] {
     growth_opps = len(insights.get("recommended_product_opportunities") or [])
     if growth_opps == 0:
         growth_opps = len(insights.get("most_frequent_themes") or [])
+
+    st.caption(
+        f"🟢 LIVE · 📚 Historical · {_format_last_updated(refresh.get('last_sync_at') or live_meta.get('last_updated'))} · "
+        f"Next refresh: {_format_last_updated(refresh.get('next_refresh_at'))}"
+    )
+
+    with st.container():
+        w1 = st.columns(3)
+        w1[0].metric(
+            "Total Historical Reviews",
+            f"{int(warehouse.get('total_historical') or stats.get('total') or 0):,}",
+        )
+        w1[1].metric("Total Live Reviews", f"{int(warehouse.get('total_live') or 0):,}")
+        w1[2].metric(
+            "Merged Reviews",
+            f"{int(warehouse.get('merged_reviews') or stats.get('total') or 0):,}",
+        )
+        w2 = st.columns(3)
+        w2[0].metric("New Reviews Today", f"{int(warehouse.get('new_reviews_today') or 0):,}")
+        w2[1].metric(
+            "New Reviews This Week",
+            f"{int(warehouse.get('new_reviews_this_week') or 0):,}",
+        )
+        w2[2].metric(
+            "Last Sync Time",
+            _format_last_updated(
+                warehouse.get("last_sync_time")
+                or refresh.get("last_sync_at")
+                or live_meta.get("last_updated")
+            ),
+        )
+        st.caption(
+            f"Latest Review Date: {_format_last_updated(warehouse.get('latest_review_date'))}"
+        )
 
     with st.container():
         r1 = st.columns(3)

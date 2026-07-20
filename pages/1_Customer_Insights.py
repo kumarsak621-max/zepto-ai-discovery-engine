@@ -26,7 +26,8 @@ from src.gemini_status_ui import (
 )
 from src.insights_ui import render_root_cause_analysis
 from src.paths import ensure_runtime_dirs
-from src.streamlit_cache import cached_discovery_dashboard, clear_data_caches
+from src.review_sync import get_refresh_status
+from src.streamlit_cache import cached_filtered_dashboard, clear_data_caches
 from src.streamlit_playstore import format_last_updated, render_last_updated_caption
 
 st.set_page_config(page_title="Customer Insights", page_icon="💡", layout="wide")
@@ -72,6 +73,7 @@ def _as_str_list(value: Any) -> list[str]:
                     or item.get("text")
                     or item.get("summary")
                     or item.get("recommendation")
+                    or item.get("label")
                     or ""
                 ).strip()
             else:
@@ -108,20 +110,107 @@ except Exception as exc:
 
 st.title("💡 Customer Insights")
 st.caption(
-    "AI Discovery Engine for Zepto PMs — sentiment, habits, segments, discovery barriers, "
-    "category opportunities, and growth recommendations from live store reviews."
+    "AI Discovery Engine for Zepto PMs — historical warehouse + live store reviews, "
+    "sentiment, habits, segments, discovery barriers, and growth recommendations."
 )
 render_auto_collect_warning()
+
+_refresh = get_refresh_status()
+_badge_cols = st.columns([1, 1, 1, 2])
+_badge_cols[0].markdown("🟢 **LIVE**")
+_badge_cols[1].markdown("📚 **Historical**")
+_badge_cols[2].markdown(f"⏱ **{_refresh.get('relative') or 'Updated —'}**")
 try:
     render_last_updated_caption()
 except Exception:
-    st.caption("Last Updated: —")
+    st.caption(f"Last Updated: {format_last_updated(_refresh.get('last_sync_at'))}")
+st.caption(
+    f"Next Refresh: **{format_last_updated(_refresh.get('next_refresh_at'))}** "
+    f"(auto every {_refresh.get('auto_refresh_minutes', 30)} min)"
+)
 render_gemini_key_caption()
+
+st.markdown("---")
+st.subheader("Data Source")
+_data_source_label = st.radio(
+    "Select review corpus",
+    options=["Historical Reviews", "Live Reviews", "Historical + Live"],
+    horizontal=True,
+    key="ci_data_source",
+)
+_DATA_SOURCE_MAP = {
+    "Historical Reviews": "historical",
+    "Live Reviews": "live",
+    "Historical + Live": "combined",
+}
+data_source = _DATA_SOURCE_MAP.get(_data_source_label, "combined")
+
+with st.expander("Filters", expanded=True):
+    f1, f2, f3, f4 = st.columns(4)
+    with f1:
+        date_range_label = st.selectbox(
+            "Date Range",
+            [
+                "All Time",
+                "Last 24 Hours",
+                "Last 7 Days",
+                "Last 30 Days",
+                "Last 90 Days",
+            ],
+            key="ci_date_range",
+        )
+    with f2:
+        platform_label = st.selectbox(
+            "Platform",
+            ["Both", "Google Play", "Apple Store"],
+            key="ci_platform",
+        )
+    with f3:
+        rating_sel = st.multiselect(
+            "Rating",
+            options=[1, 2, 3, 4, 5],
+            default=[],
+            format_func=lambda x: f"{x}★",
+            key="ci_ratings",
+        )
+    with f4:
+        sentiment_sel = st.multiselect(
+            "Sentiment",
+            options=["Positive", "Neutral", "Negative"],
+            default=[],
+            key="ci_sentiments",
+        )
+
+_DATE_MAP = {
+    "All Time": "all",
+    "Last 24 Hours": "24h",
+    "Last 7 Days": "7d",
+    "Last 30 Days": "30d",
+    "Last 90 Days": "90d",
+}
+date_range = _DATE_MAP.get(date_range_label, "all")
+platform = {
+    "Both": "both",
+    "Google Play": "playstore",
+    "Apple Store": "appstore",
+}.get(platform_label, "both")
+ratings_key = ",".join(str(r) for r in sorted(rating_sel)) if rating_sel else ""
+sentiments_key = "|".join(sentiment_sel) if sentiment_sel else ""
 
 dash: dict[str, Any] = {}
 try:
     with st.spinner("Loading Customer Insights…"):
-        dash = cached_discovery_dashboard(limit=2000) or {}
+        dash = (
+            cached_filtered_dashboard(
+                data_source=data_source,
+                date_range=date_range,
+                platform=platform,
+                ratings_key=ratings_key,
+                sentiments_key=sentiments_key,
+                limit=2000,
+            )
+            or {}
+        )
 except Exception as exc:
     st.error(f"Could not load insights. Details: {exc}")
     st.warning(
@@ -137,12 +226,25 @@ discovery = dash.get("discovery") or {}
 validation = dash.get("validation") or {}
 review_sources = dash.get("review_sources") or {}
 review_kpis = dash.get("review_kpis") or {}
+warehouse = dash.get("warehouse_stats") or {}
+trend_insights = dash.get("trend_insights") or {}
+chart_series = dash.get("chart_series") or {}
+extended = dash.get("extended_analysis") or {}
+
+_hc = int(warehouse.get("total_historical") or 0)
+_lc = int(warehouse.get("total_live") or 0)
+_mc = int(warehouse.get("merged_reviews") or 0)
+st.caption(
+    f"Warehouse · Historical: **{_hc:,}** · Live window: **{_lc:,}** · "
+    f"Merged: **{_mc:,}** · Filtered view: **{len(reviews):,}** "
+    f"({_data_source_label})"
+)
 
 if not isinstance(reviews, list) or not reviews:
     st.warning(
-        "Unable to fetch latest reviews. Displaying the most recently analyzed dataset "
-        "when available. Reload the app to retry automatic collection from Google Play "
-        "and the App Store."
+        "No reviews match the current filters (or the warehouse is empty). "
+        "Try **Historical + Live**, widen the date range, or reload to collect "
+        "from Google Play and the App Store."
     )
     st.stop()
 
@@ -150,7 +252,6 @@ _discovery_source = str((dash.get("discovery") or {}).get("source") or "")
 if _discovery_source.startswith("fallback-all-keys") or _discovery_source.startswith(
     "fallback-auth"
 ):
-    # Shown only after the key manager exhausted every configured Gemini key.
     render_gemini_all_keys_failed_warning()
 
 try:
@@ -171,6 +272,215 @@ if analyzed_count <= 0:
         "Click **↻ Re-run advanced analysis on pending reviews** at the bottom, "
         "or reload the app to retry automatic collection and analysis."
     )
+
+
+# =============================================================================
+# Live warehouse dashboard
+# =============================================================================
+def _section_warehouse() -> None:
+    st.markdown("---")
+    st.header("Live Dashboard")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Historical Reviews", f"{int(warehouse.get('total_historical') or 0):,}")
+    c2.metric("Total Live Reviews", f"{int(warehouse.get('total_live') or 0):,}")
+    c3.metric("Merged Reviews", f"{int(warehouse.get('merged_reviews') or 0):,}")
+    c4, c5, c6 = st.columns(3)
+    c4.metric("New Reviews Today", f"{int(warehouse.get('new_reviews_today') or 0):,}")
+    c5.metric("New Reviews This Week", f"{int(warehouse.get('new_reviews_this_week') or 0):,}")
+    c6.metric(
+        "Last Sync Time",
+        format_last_updated(warehouse.get("last_sync_time") or _refresh.get("last_sync_at")),
+    )
+    st.caption(
+        f"Latest Review Date: **{format_last_updated(warehouse.get('latest_review_date'))}** · "
+        f"Live window: last {warehouse.get('live_window_days', 7)} days"
+    )
+
+
+_safe_section("Live Dashboard", _section_warehouse)
+
+
+# =============================================================================
+# AI Analysis (mode-aware)
+# =============================================================================
+def _section_ai_analysis() -> None:
+    st.markdown("---")
+    st.header("AI Analysis")
+    mode_label = {
+        "historical": "Historical Reviews only",
+        "live": "Live Reviews only",
+        "combined": "Merged Reviews (Historical + Live)",
+    }.get(data_source, "Merged Reviews")
+    st.caption(f"Gemini / evidence analysis for: **{mode_label}**")
+    conf = discovery.get("ai_confidence_score") or extended.get("confidence_score") or 0
+    st.metric("Confidence Score", f"{conf}%")
+    st.subheader("Executive Summary")
+    st.write(
+        extended.get("executive_summary")
+        or insights.get("ai_summary")
+        or "Summary appears after analysis."
+    )
+    a1, a2 = st.columns(2)
+    with a1:
+        st.markdown("**Top Pain Points**")
+        for item in _as_records(extended.get("top_pain_points") or insights.get("top_customer_problems"))[:6]:
+            st.write(f"- {item.get('label') or item.get('pain_point')} ({item.get('count', 0)})")
+        st.markdown("**Emerging Problems**")
+        for item in _as_records(extended.get("emerging_problems"))[:5]:
+            st.write(f"- {item.get('label')} ({item.get('count', 0)})")
+        st.markdown("**Feature Requests**")
+        for item in _as_records(extended.get("feature_requests"))[:5]:
+            st.write(f"- {item.get('label')} ({item.get('count', 0)})")
+    with a2:
+        st.markdown("**Top Appreciated Features**")
+        for item in _as_records(extended.get("top_appreciated_features"))[:6]:
+            st.write(f"- {item.get('label')} ({item.get('count', 0)})")
+        st.markdown("**New Trends**")
+        for item in _as_records(extended.get("new_trends"))[:5]:
+            st.write(f"- {item.get('label')} ({item.get('count', 0)})")
+        st.markdown("**Customer Segments**")
+        for item in _as_records(extended.get("customer_segments") or insights.get("all_segments"))[:5]:
+            st.write(f"- {item.get('label')} ({item.get('count', 0)})")
+    st.markdown("**Product Opportunities**")
+    for item in _as_records(extended.get("product_opportunities"))[:5]:
+        st.write(f"- {item.get('label')} ({item.get('count', 0)})")
+    st.markdown("**Growth Recommendations**")
+    for line in _as_str_list(
+        extended.get("growth_recommendations") or discovery.get("growth_recommendations")
+    )[:8]:
+        st.write(f"- {line}")
+    st.markdown("**PM Recommendations**")
+    for line in _as_str_list(extended.get("pm_recommendations") or discovery.get("pm_recommendations"))[:8]:
+        st.write(f"- {line}")
+
+
+_safe_section("AI Analysis", _section_ai_analysis)
+
+
+# =============================================================================
+# New Insights (week-over-week)
+# =============================================================================
+def _section_new_insights() -> None:
+    st.markdown("---")
+    st.header("New Insights")
+    n1, n2 = st.columns(2)
+    with n1:
+        st.markdown("**NEW issues appearing this week**")
+        items = _as_records(trend_insights.get("new_issues_this_week"))
+        if items:
+            for item in items:
+                st.write(f"- {item.get('label')} ({item.get('count', 0)})")
+        else:
+            st.caption("No brand-new issues detected this week.")
+        st.markdown("**Trending complaints**")
+        for item in _as_records(trend_insights.get("trending_complaints"))[:6]:
+            st.write(
+                f"- {item.get('label')} · this week {item.get('count', 0)} "
+                f"(last week {item.get('last_week', 0)})"
+            )
+        st.markdown("**Problems increasing over time**")
+        for item in _as_records(trend_insights.get("problems_increasing"))[:5]:
+            st.write(
+                f"- {item.get('label')} · Δ +{item.get('delta', 0)} "
+                f"({item.get('last_week', 0)} → {item.get('this_week', 0)})"
+            )
+    with n2:
+        st.markdown("**Trending feature requests**")
+        for item in _as_records(trend_insights.get("trending_feature_requests"))[:6]:
+            st.write(
+                f"- {item.get('label')} · this week {item.get('count', 0)} "
+                f"(last week {item.get('last_week', 0)})"
+            )
+        st.markdown("**Problems decreasing over time**")
+        for item in _as_records(trend_insights.get("problems_decreasing"))[:5]:
+            st.write(
+                f"- {item.get('label')} · Δ {item.get('delta', 0)} "
+                f"({item.get('last_week', 0)} → {item.get('this_week', 0)})"
+            )
+        st.markdown("**Sentiment change vs last week**")
+        delta = trend_insights.get("sentiment_change_vs_last_week") or {}
+        if isinstance(delta, dict) and delta:
+            d1, d2, d3 = st.columns(3)
+            d1.metric("Positive", f"{float(delta.get('Positive', 0)):+.1f} pp")
+            d2.metric("Neutral", f"{float(delta.get('Neutral', 0)):+.1f} pp")
+            d3.metric("Negative", f"{float(delta.get('Negative', 0)):+.1f} pp")
+        else:
+            st.caption("Not enough week-over-week data yet.")
+
+
+_safe_section("New Insights", _section_new_insights)
+
+
+# =============================================================================
+# Visualizations
+# =============================================================================
+def _section_visualizations() -> None:
+    st.markdown("---")
+    st.header("Visualizations")
+    timeline = _as_records(chart_series.get("review_timeline"))
+    if timeline:
+        fig = px.line(pd.DataFrame(timeline), x="date", y="count", title="Review Timeline")
+        _plot(fig)
+    sent_tr = _as_records(chart_series.get("sentiment_trend"))
+    if sent_tr:
+        sdf = pd.DataFrame(sent_tr)
+        melt = sdf.melt(id_vars=["date"], var_name="sentiment", value_name="count")
+        fig = px.line(melt, x="date", y="count", color="sentiment", title="Sentiment Trend")
+        _plot(fig)
+    rat = _as_records(chart_series.get("rating_trend"))
+    if rat:
+        fig = px.line(pd.DataFrame(rat), x="date", y="avg_rating", title="Rating Trend")
+        _plot(fig)
+    r1, r2, r3 = st.columns(3)
+    with r1:
+        daily = _as_records(chart_series.get("daily_reviews"))
+        if daily:
+            fig = px.bar(pd.DataFrame(daily).tail(30), x="date", y="count", title="Daily Reviews")
+            _plot(fig, height=280)
+    with r2:
+        weekly = _as_records(chart_series.get("weekly_reviews"))
+        if weekly:
+            fig = px.bar(pd.DataFrame(weekly).tail(12), x="week", y="count", title="Weekly Reviews")
+            _plot(fig, height=280)
+    with r3:
+        monthly = _as_records(chart_series.get("monthly_reviews"))
+        if monthly:
+            fig = px.bar(pd.DataFrame(monthly).tail(12), x="month", y="count", title="Monthly Reviews")
+            _plot(fig, height=280)
+    kw = _as_records(chart_series.get("top_keywords"))
+    if kw:
+        fig = px.bar(
+            pd.DataFrame(kw).head(15),
+            x="count",
+            y="keyword",
+            orientation="h",
+            title="Top Keywords",
+        )
+        fig.update_layout(yaxis={"categoryorder": "total ascending"})
+        _plot(fig, height=360)
+    for title, key in [
+        ("Category Trend", "category_trend"),
+        ("Pain Point Trend", "pain_point_trend"),
+        ("Feature Request Trend", "feature_request_trend"),
+    ]:
+        rows = _as_records(chart_series.get(key))
+        if not rows:
+            continue
+        rdf = pd.DataFrame(rows)
+        if not _has_cols(rdf, ["period", "label", "count"]):
+            continue
+        fig = px.bar(
+            rdf.tail(40),
+            x="period",
+            y="count",
+            color="label",
+            title=title,
+            barmode="stack",
+        )
+        _plot(fig, height=320)
+
+
+_safe_section("Visualizations", _section_visualizations)
 
 
 # =============================================================================
@@ -215,7 +525,7 @@ def _section_kpis() -> None:
     k2.metric("Average Rating", f"{avg:.2f}" if isinstance(avg, (int, float)) else "—")
     k3.metric("Analyzed Reviews", f"{int(review_kpis.get('Analyzed Reviews') or analyzed_count):,}")
     k4.metric("Unique Themes", f"{int(review_kpis.get('Unique Themes') or 0):,}")
-    k5.metric("Last Updated", format_last_updated())
+    k5.metric("Last Updated", format_last_updated(_refresh.get("last_sync_at")))
 
 
 _safe_section("Review KPIs", _section_kpis)

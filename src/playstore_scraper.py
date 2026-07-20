@@ -62,9 +62,15 @@ def _normalize_review(item: dict[str, Any], category: str = "app_review") -> dic
         "title": item.get("userName"),
         "upvotes": item.get("thumbsUpCount"),
         "external_id": review_id,
+        "app_name": PLAYSTORE_APP_NAME,
+        "reviewer_name": item.get("userName"),
+        "country": "in",
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
         # CSV-oriented aliases
         "review_id": review_id,
         "review_text": text,
+        "review_date": date_str,
+        "version": item.get("reviewCreatedVersion") or item.get("appVersion"),
         "helpful_votes": item.get("thumbsUpCount"),
     }
 

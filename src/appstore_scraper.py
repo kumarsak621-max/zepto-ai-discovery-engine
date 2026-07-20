@@ -101,6 +101,13 @@ def collect_appstore_reviews(
                 else None
             )
 
+            author_block = entry.get("author", {})
+            reviewer_name = None
+            if isinstance(author_block, dict):
+                name_block = author_block.get("name", {})
+                if isinstance(name_block, dict):
+                    reviewer_name = clean_text(str(name_block.get("label") or ""))[:120] or None
+
             external_id = f"ios_{review_id}" if review_id else f"ios_{hash(text) & 0xFFFFFFFF:x}"
             collected[external_id] = {
                 "source": "appstore",
@@ -116,6 +123,13 @@ def collect_appstore_reviews(
                 "upvotes": None,
                 "external_id": external_id,
                 "review_id": review_id,
+                "review_text": text,
+                "review_date": date_str,
+                "app_name": "Zepto: Groceries in minutes",
+                "reviewer_name": reviewer_name or title,
+                "country": country,
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+                "version": None,
                 "helpful_votes": None,
             }
             if len(collected) >= count:
