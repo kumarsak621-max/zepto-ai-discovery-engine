@@ -206,11 +206,17 @@ st.caption(
 )
 
 if not isinstance(reviews, list) or not reviews:
-    st.warning(
-        "No reviews match the current filters (or the warehouse is empty). "
-        "Try **Historical + Live Reviews**, widen the date range, or switch to "
-        "**Live Reviews** to fetch from Google Play and the App Store."
-    )
+    from src.review_filter import HISTORICAL_EMPTY_MSG
+
+    if data_source == "historical":
+        st.warning(HISTORICAL_EMPTY_MSG)
+        st.caption("Expected range: 01 Apr 2026 to 05 Jul 2026. July reviews belong under Live Reviews.")
+    else:
+        st.warning(
+            "No reviews match the current filters (or the warehouse is empty). "
+            "Try **Historical + Live Reviews**, set Date Range to **All Time**, or switch to "
+            "**Live Reviews** to fetch from Google Play and the App Store."
+        )
     st.stop()
 
 _discovery_source = str((dash.get("discovery") or {}).get("source") or "")

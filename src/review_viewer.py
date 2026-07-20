@@ -23,16 +23,13 @@ def _platform_label(source: Any) -> str:
 
 
 def _review_source_label(row: dict[str, Any], *, data_source: str) -> str:
-    """Label each row as Historical / Live from calendar date bounds."""
+    """Label each row as Historical / Live from review_date only (never fetched_at)."""
     from src.review_dates import classify_review_date, parse_review_date
 
-    cal = parse_review_date(
-        row.get("date") or row.get("review_date") or row.get("fetched_at")
-    )
+    cal = parse_review_date(row.get("date") or row.get("review_date"))
     label = classify_review_date(cal)
     if label in {"Historical", "Live"}:
         return label
-    # Fallback for rows outside both ranges
     mode = str(data_source or "combined").lower()
     if mode == "historical":
         return "Historical"

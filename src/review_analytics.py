@@ -90,7 +90,7 @@ def compute_trend_insights(reviews: list[dict[str, Any]]) -> dict[str, Any]:
     def _bucket(rows: list[dict[str, Any]], start: datetime, end: datetime) -> list[dict]:
         out = []
         for r in rows:
-            dt = _parse_dt(r.get("date") or r.get("fetched_at") or r.get("created_at"))
+            dt = _parse_dt(r.get("date") or r.get("review_date"))
             if dt and start <= dt < end:
                 out.append(r)
         return out
@@ -207,7 +207,7 @@ def compute_chart_series(reviews: list[dict[str, Any]]) -> dict[str, Any]:
     keywords: Counter = Counter()
 
     for r in reviews:
-        dt = _parse_dt(r.get("date") or r.get("fetched_at") or r.get("created_at"))
+        dt = _parse_dt(r.get("date") or r.get("review_date"))
         if not dt:
             continue
         day = dt.strftime("%Y-%m-%d")
@@ -306,7 +306,7 @@ def build_extended_analysis_sections(reviews: list[dict[str, Any]]) -> dict[str,
             segments[str(r["customer_segment"])] += 1
         if r.get("product_opportunity"):
             opportunities[str(r["product_opportunity"])[:120]] += 1
-        dt = _parse_dt(r.get("date") or r.get("fetched_at"))
+        dt = _parse_dt(r.get("date") or r.get("review_date"))
         if dt and dt >= week_ago and (r.get("pain_point") or r.get("theme")):
             emerging[str(r.get("pain_point") or r.get("theme"))[:90]] += 1
 

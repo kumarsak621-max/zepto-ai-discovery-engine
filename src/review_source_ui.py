@@ -69,6 +69,11 @@ def render_review_source_selector(*, key_prefix: str = "ci") -> str:
 def render_review_filters(*, key_prefix: str = "ci") -> dict[str, Any]:
     """Render date/platform/rating/sentiment/keyword filters."""
     with st.expander("Filters", expanded=True):
+        st.caption(
+            "Review Source date bounds always apply first "
+            "(Historical: 01 Apr–05 Jul 2026 · Live: 06 Jul 2026 onward). "
+            "Use Date Range = All Time to see the full source set."
+        )
         f1, f2, f3, f4 = st.columns(4)
         with f1:
             date_range_label = st.selectbox(
@@ -158,15 +163,21 @@ def render_visible_reviews_table(
     key_prefix: str = "ci",
 ) -> list[dict[str, Any]]:
     """Render interactive Visible Reviews table + CSV/Excel export. Returns visible rows."""
+    from src.review_filter import HISTORICAL_EMPTY_MSG
+
     visible = filter_by_keyword(reviews, keyword)
     st.markdown("---")
     st.header("Visible Reviews")
     captions = {
-        "historical": "Historical Reviews — 01 Apr 2026 → 05 Jul 2026 (inclusive)",
-        "live": "Live Reviews — 06 Jul 2026 → Latest Available Review (auto-updates)",
+        "historical": "Historical Reviews — 01 Apr 2026 to 05 Jul 2026 (inclusive)",
+        "live": "Live Reviews — 06 Jul 2026 to Latest Available Review (auto-updates)",
         "combined": "Historical + Live Reviews — merged & deduplicated",
     }
     st.caption(captions.get(data_source, "Reviews"))
+
+    if str(data_source).lower() == "historical" and not visible:
+        st.warning(HISTORICAL_EMPTY_MSG)
+        return visible
 
     display_df = reviews_to_display_df(visible, data_source=data_source)
     # Prefer "Source" column name (spec); keep backward compatibility
@@ -175,7 +186,10 @@ def render_visible_reviews_table(
 
     st.metric("Reviews shown", f"{len(display_df):,}")
     if display_df.empty:
-        st.info("No reviews match the current filters or keyword search.")
+        if str(data_source).lower() == "historical":
+            st.warning(HISTORICAL_EMPTY_MSG)
+        else:
+            st.info("No reviews match the current filters or keyword search.")
         return visible
 
     st.dataframe(
