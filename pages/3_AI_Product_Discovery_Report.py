@@ -55,7 +55,7 @@ def _render_chart(chart: dict[str, Any] | None) -> None:
         else:
             fig = px.bar(df, x="label", y="value", title=title)
         fig.update_layout(**_CHART_LAYOUT)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     except Exception as exc:
         st.caption(f"Chart unavailable: {exc}")
 
@@ -249,7 +249,7 @@ else:
     ]
     st.dataframe(
         rdf[show_cols],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "rank": "Rank",

@@ -169,7 +169,7 @@ div[data-testid="stMetric"] {
         refresh = st.button(
             "🔄 Refresh Reviews",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             key="dashboard_refresh_reviews",
         )
 
@@ -346,7 +346,7 @@ div[data-testid="stMetric"] {
     else:
         st.dataframe(
             feed,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Source": st.column_config.TextColumn("Source", width="small"),

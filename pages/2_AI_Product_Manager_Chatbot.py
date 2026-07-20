@@ -62,7 +62,7 @@ if "pm_messages" not in st.session_state:
 st.markdown("**Try a research prompt**")
 cols = st.columns(2)
 for i, q in enumerate(EXAMPLE_QUESTIONS):
-    if cols[i % 2].button(q, use_container_width=True, key=f"ex_{i}"):
+    if cols[i % 2].button(q, width="stretch", key=f"ex_{i}"):
         st.session_state.pending_question = q
 
 for msg in st.session_state.pm_messages:

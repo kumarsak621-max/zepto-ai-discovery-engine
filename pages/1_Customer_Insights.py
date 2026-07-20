@@ -96,7 +96,7 @@ def _plot(fig: Any, *, height: int | None = None) -> None:
             fig.update_layout(**_CHART_LAYOUT, height=height)
         else:
             fig.update_layout(**_CHART_LAYOUT)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     except Exception as exc:
         st.warning(f"Chart could not be rendered: {exc}")
 
@@ -612,7 +612,7 @@ def _section_pain() -> None:
         fig_p.update_layout(yaxis={"categoryorder": "total ascending"})
         _plot(fig_p, height=380)
     with c2:
-        st.dataframe(pdf, use_container_width=True, hide_index=True, height=380)
+        st.dataframe(pdf, width="stretch", hide_index=True, height=380)
 
 
 _safe_section("Pain Points", _section_pain)
@@ -645,7 +645,7 @@ def _section_themes() -> None:
     fig_th.update_layout(xaxis_tickangle=-25)
     _plot(fig_th)
     with st.expander("Theme table"):
-        st.dataframe(tdf, use_container_width=True, hide_index=True)
+        st.dataframe(tdf, width="stretch", hide_index=True)
 
 
 _safe_section("Themes", _section_themes)
@@ -706,7 +706,7 @@ def _section_segments() -> None:
         if c in seg_df.columns
     ]
     if display_cols:
-        st.dataframe(seg_df[display_cols], use_container_width=True, hide_index=True)
+        st.dataframe(seg_df[display_cols], width="stretch", hide_index=True)
     if _has_cols(seg_df, ["percentage", "segment"]):
         fig_seg = px.bar(
             seg_df,
@@ -749,7 +749,7 @@ def _section_barriers() -> None:
         for c in ["barrier", "frequency", "severity", "representative_review"]
         if c in bdf.columns
     ]
-    st.dataframe(bdf[show_cols], use_container_width=True, hide_index=True)
+    st.dataframe(bdf[show_cols], width="stretch", hide_index=True)
     if _has_cols(bdf, ["barrier", "frequency"]):
         fig_b = px.bar(
             bdf,
@@ -808,7 +808,7 @@ def _section_opps() -> None:
                 return "—"
 
         odf["Confidence Score"] = odf["Confidence Score"].apply(_fmt_conf)
-    st.dataframe(odf, use_container_width=True, hide_index=True)
+    st.dataframe(odf, width="stretch", hide_index=True)
     for row in opps:
         try:
             with st.container(border=True):
@@ -1096,7 +1096,7 @@ with st.expander("AI Summary & structured per-review analysis"):
             if c in sample.columns
         ]
         if cols:
-            st.dataframe(sample[cols].head(25), use_container_width=True, hide_index=True)
+            st.dataframe(sample[cols].head(25), width="stretch", hide_index=True)
         else:
             st.info("No structured analysis columns available yet.")
     except Exception as exc:

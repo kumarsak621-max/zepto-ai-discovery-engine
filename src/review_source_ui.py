@@ -155,7 +155,7 @@ def render_visible_reviews_table(
 
     st.dataframe(
         display_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         height=min(560, 80 + min(len(display_df), 18) * 35),
         column_config={
@@ -179,7 +179,7 @@ def render_visible_reviews_table(
             data=dataframe_to_csv_bytes(display_df),
             file_name=f"zepto_reviews_{slug}_{stamp}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
             key=f"{key_prefix}_download_csv",
         )
     with export_cols[1]:
@@ -189,7 +189,7 @@ def render_visible_reviews_table(
                 data=dataframe_to_excel_bytes(display_df),
                 file_name=f"zepto_reviews_{slug}_{stamp}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                width="stretch",
                 key=f"{key_prefix}_download_xlsx",
             )
         except Exception as exc:

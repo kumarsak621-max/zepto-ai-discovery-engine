@@ -19,7 +19,7 @@ def _safe_plotly(fig: Any, *, chart_layout: dict[str, Any], height: int | None =
             fig.update_layout(**chart_layout, height=height)
         else:
             fig.update_layout(**chart_layout)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     except Exception as exc:
         st.warning(f"Chart could not be rendered. Details: {exc}")
 
@@ -113,7 +113,7 @@ def render_root_cause_analysis(
         if table_cols:
             st.dataframe(
                 rca_df[table_cols].rename(columns=table_rename),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
@@ -221,7 +221,7 @@ def render_root_cause_analysis(
                 .sort_values("_ord")
                 .drop(columns=["_ord"])
             )
-        st.dataframe(prio_df, use_container_width=True, hide_index=True)
+        st.dataframe(prio_df, width="stretch", hide_index=True)
 
         impact_map = {"Low": 1, "Medium": 2, "High": 3}
         effort_map = {"Low": 1, "Medium": 2, "High": 3}
