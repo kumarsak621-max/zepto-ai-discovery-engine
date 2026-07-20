@@ -65,6 +65,28 @@ def cached_filtered_dashboard(
     )
 
 
+@st.cache_data(ttl=120, show_spinner=True)
+def cached_product_discovery_report(
+    reviews_fingerprint: str = "",
+    analyzed_fingerprint: str = "",
+    source_fingerprint: str = "",
+    limit: int = 5000,
+) -> dict[str, Any]:
+    """Assignment report regenerated when the review/analysis fingerprint changes."""
+    _ = (reviews_fingerprint, analyzed_fingerprint, source_fingerprint)
+    from src.discovery_insights import build_discovery_dashboard
+    from src.product_discovery_report import build_product_discovery_report
+
+    dash = build_discovery_dashboard(limit=limit, analysis_mode="all")
+    return build_product_discovery_report(
+        reviews=dash.get("reviews") or [],
+        insights=dash.get("insights") or {},
+        discovery=dash.get("discovery") or {},
+        validation=dash.get("validation") or {},
+        limit=limit,
+    )
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def cached_warehouse_stats() -> dict[str, Any]:
     from src.config import LIVE_REVIEW_WINDOW_DAYS
@@ -88,6 +110,7 @@ def clear_data_caches() -> None:
         cached_reviews.clear()
         cached_discovery_dashboard.clear()
         cached_filtered_dashboard.clear()
+        cached_product_discovery_report.clear()
         cached_warehouse_stats.clear()
     except Exception:
         try:

@@ -358,7 +358,7 @@ div[data-testid="stMetric"] {
 
 
 # ---------------------------------------------------------------------------
-# Navigation: Dashboard (default) · Customer Insights · Chatbot
+# Navigation: Dashboard · Customer Insights · Discovery Report · Chatbot
 # Using st.navigation so the sidebar labels match the product IA.
 # Existing page files are unchanged (backend / charts / chatbot preserved).
 # ---------------------------------------------------------------------------
@@ -373,11 +373,18 @@ insights_page = st.Page(
     title="Customer Insights",
     icon="📈",
 )
+discovery_report_page = st.Page(
+    "pages/3_AI_Product_Discovery_Report.py",
+    title="AI Product Discovery Report",
+    icon="🧭",
+)
 chatbot_page = st.Page(
     "pages/2_AI_Product_Manager_Chatbot.py",
     title="AI Product Manager Chatbot",
     icon="🤖",
 )
 
-pg = st.navigation([dashboard_page, insights_page, chatbot_page])
+pg = st.navigation(
+    [dashboard_page, insights_page, discovery_report_page, chatbot_page]
+)
 pg.run()
