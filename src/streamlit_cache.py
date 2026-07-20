@@ -44,7 +44,7 @@ def cached_discovery_dashboard(limit: int = 2000) -> dict[str, Any]:
 
 @st.cache_data(ttl=120, show_spinner=True)
 def cached_filtered_dashboard(
-    data_source: str = "combined",
+    data_source: str = "all",
     date_range: str = "all",
     platform: str = "both",
     ratings_key: str = "",

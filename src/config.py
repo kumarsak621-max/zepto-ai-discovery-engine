@@ -118,13 +118,14 @@ TWITTER_BEARER_TOKEN = _env_str("TWITTER_BEARER_TOKEN", "")
 
 PLAYSTORE_APP_ID = _env_str("PLAYSTORE_APP_ID", "com.zeptoconsumerapp")
 PLAYSTORE_APP_NAME = "Zepto: Groceries in minutes"
-PLAYSTORE_REVIEW_COUNT = _env_int("PLAYSTORE_REVIEW_COUNT", 500)
+# Default fetch volume — pipeline also tops up toward MIN_UNIQUE_REVIEWS
+PLAYSTORE_REVIEW_COUNT = _env_int("PLAYSTORE_REVIEW_COUNT", 600)
 PLAYSTORE_CACHE_TTL_HOURS = _env_int("PLAYSTORE_CACHE_TTL_HOURS", 6)
 
 # Apple App Store (iTunes RSS) — Zepto: Groceries in minutes
 APPSTORE_APP_ID = _env_str("APPSTORE_APP_ID", "1575323645")
 APPSTORE_COUNTRY = _env_str("APPSTORE_COUNTRY", "in")
-APPSTORE_REVIEW_COUNT = _env_int("APPSTORE_REVIEW_COUNT", 200)
+APPSTORE_REVIEW_COUNT = _env_int("APPSTORE_REVIEW_COUNT", 500)
 APPSTORE_ENABLED = _env_str("APPSTORE_ENABLED", "1").lower() not in {
     "0",
     "false",
@@ -134,14 +135,12 @@ APPSTORE_ENABLED = _env_str("APPSTORE_ENABLED", "1").lower() not in {
 
 DAILY_SCHEDULE_HOUR = _env_int("DAILY_SCHEDULE_HOUR", 6)
 LIVE_CACHE_TTL_HOURS = _env_int("LIVE_CACHE_TTL_HOURS", 6)
-# Legacy rolling window (kept for backward compatibility; date split uses fixed bounds below)
 LIVE_REVIEW_WINDOW_DAYS = _env_int("LIVE_REVIEW_WINDOW_DAYS", 7)
-# Auto-check for new store reviews every N minutes while the app is open
 AUTO_REFRESH_MINUTES = _env_int("AUTO_REFRESH_MINUTES", 30)
+# Target unique reviews in the local warehouse (real store reviews only)
+MIN_UNIQUE_REVIEWS = _env_int("MIN_UNIQUE_REVIEWS", 600)
 
-# Fixed Review Source date bounds (calendar dates, inclusive where noted)
-# Historical: 01 Apr 2026 → 05 Jul 2026 (inclusive)
-# Live:       06 Jul 2026 → latest available (no end date)
+# Live Reviews start date (open-ended — no end date)
 def _env_date(name: str, default: _date) -> _date:
     raw = _secret_or_env(name, "")
     if not raw:
@@ -153,9 +152,10 @@ def _env_date(name: str, default: _date) -> _date:
         return default
 
 
+LIVE_START_DATE = _env_date("LIVE_START_DATE", _date(2026, 7, 6))
+# Legacy env vars kept so older Secrets do not crash imports
 HISTORICAL_START_DATE = _env_date("HISTORICAL_START_DATE", _date(2026, 4, 1))
 HISTORICAL_END_DATE = _env_date("HISTORICAL_END_DATE", _date(2026, 7, 5))
-LIVE_START_DATE = _env_date("LIVE_START_DATE", _date(2026, 7, 6))
 
 REVIEWS_CSV_PATH = DATA_DIR / "reviews.csv"
 LIVE_META_PATH = DATA_DIR / "live_reviews_meta.json"

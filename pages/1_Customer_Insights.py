@@ -110,35 +110,27 @@ except Exception as exc:
 
 st.title("💡 Customer Insights")
 st.caption(
-    "AI Discovery Engine for Zepto PMs — historical warehouse + live store reviews, "
+    "AI Discovery Engine for Zepto PMs — live store reviews + full warehouse, "
     "sentiment, habits, segments, discovery barriers, and growth recommendations."
 )
 
 st.markdown("---")
 data_source = render_review_source_selector(key_prefix="ci")
-# Historical = DB only (no fetch). Live = force fetch. Combined = normal sync.
+# Live = force fetch newest. All = use warehouse (+ normal sync via sidebar).
 ensure_source_data_loaded(data_source, key_prefix="ci")
-if data_source != "historical":
-    try:
-        # Combined / Live: keep existing auto-collect + sidebar status
-        if data_source == "combined":
-            ensure_live_reviews_loaded()
-        render_auto_status_sidebar()
-    except Exception as exc:
-        st.sidebar.warning(f"Live data status unavailable: {exc}")
-else:
-    try:
-        render_auto_status_sidebar()
-    except Exception:
-        pass
+try:
+    if data_source == "all":
+        ensure_live_reviews_loaded()
+    render_auto_status_sidebar()
+except Exception as exc:
+    st.sidebar.warning(f"Live data status unavailable: {exc}")
 
 render_auto_collect_warning()
 
 _refresh = get_refresh_status()
-_badge_cols = st.columns([1, 1, 1, 2])
+_badge_cols = st.columns([1, 1, 2])
 _badge_cols[0].markdown("🟢 **LIVE**")
-_badge_cols[1].markdown("📚 **Historical**")
-_badge_cols[2].markdown(f"⏱ **{_refresh.get('relative') or 'Updated —'}**")
+_badge_cols[1].markdown(f"⏱ **{_refresh.get('relative') or 'Updated —'}**")
 try:
     render_last_updated_caption()
 except Exception:
@@ -190,33 +182,26 @@ trend_insights = dash.get("trend_insights") or {}
 chart_series = dash.get("chart_series") or {}
 extended = dash.get("extended_analysis") or {}
 
-_hc = int(warehouse.get("total_historical") or 0)
+_tc = int(warehouse.get("total_reviews") or warehouse.get("merged_reviews") or 0)
 _lc = int(warehouse.get("total_live") or 0)
-_mc = int(warehouse.get("merged_reviews") or 0)
 _source_label = {
-    "historical": "Historical Reviews",
     "live": "Live Reviews",
-    "combined": "Historical + Live Reviews",
-}.get(data_source, "Historical + Live Reviews")
+    "all": "All Reviews",
+    "combined": "All Reviews",
+}.get(data_source, "All Reviews")
 st.caption(
-    f"Warehouse · Historical (01 Apr–05 Jul 2026): **{_hc:,}** · "
+    f"Warehouse · Total: **{_tc:,}** · "
     f"Live (06 Jul 2026→latest): **{_lc:,}** · "
-    f"Merged: **{_mc:,}** · Loaded for analysis: **{len(reviews):,}** "
+    f"Loaded for analysis: **{len(reviews):,}** "
     f"({_source_label})"
 )
 
 if not isinstance(reviews, list) or not reviews:
-    from src.review_filter import HISTORICAL_EMPTY_MSG
-
-    if data_source == "historical":
-        st.warning(HISTORICAL_EMPTY_MSG)
-        st.caption("Expected range: 01 Apr 2026 to 05 Jul 2026. July reviews belong under Live Reviews.")
-    else:
-        st.warning(
-            "No reviews match the current filters (or the warehouse is empty). "
-            "Try **Historical + Live Reviews**, set Date Range to **All Time**, or switch to "
-            "**Live Reviews** to fetch from Google Play and the App Store."
-        )
+    st.warning(
+        "No reviews match the current filters (or the warehouse is empty). "
+        "Try **All Reviews**, set Date Range to **All Time**, or switch to "
+        "**Live Reviews** to fetch from Google Play and the App Store."
+    )
     st.stop()
 
 _discovery_source = str((dash.get("discovery") or {}).get("source") or "")
@@ -266,41 +251,27 @@ _safe_section("Visible Reviews", _section_visible_reviews)
 def _section_warehouse() -> None:
     st.markdown("---")
     st.header("Live Dashboard")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Historical Review Count", f"{int(warehouse.get('total_historical') or 0):,}")
-    c2.metric("Live Review Count", f"{int(warehouse.get('total_live') or 0):,}")
-    c3.metric("Merged Review Count", f"{int(warehouse.get('merged_reviews') or 0):,}")
-    c4, c5, c6 = st.columns(3)
-    c4.metric("New Reviews Today", f"{int(warehouse.get('new_reviews_today') or 0):,}")
-    c5.metric("New Reviews This Week", f"{int(warehouse.get('new_reviews_this_week') or 0):,}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(
+        "Total Reviews",
+        f"{int(warehouse.get('total_reviews') or warehouse.get('merged_reviews') or 0):,}",
+    )
+    c2.metric("Live Reviews", f"{int(warehouse.get('total_live') or 0):,}")
+    c3.metric("Google Play Reviews", f"{int(warehouse.get('playstore_count') or 0):,}")
+    c4.metric("Apple App Store Reviews", f"{int(warehouse.get('appstore_count') or 0):,}")
+    c5, c6, c7 = st.columns(3)
+    c5.metric("New Reviews Today", f"{int(warehouse.get('new_reviews_today') or 0):,}")
     c6.metric(
-        "Last Sync Time",
+        "Last Updated",
         format_last_updated(warehouse.get("last_sync_time") or _refresh.get("last_sync_at")),
     )
-    c7, c8, c9 = st.columns(3)
     c7.metric(
-        "Latest Live Review Date",
-        format_last_updated(
-            warehouse.get("latest_live_review_date") or warehouse.get("latest_review_date")
-        ),
-    )
-    c8.metric(
-        "Historical Date Range",
-        str(warehouse.get("historical_date_range") or "01 Apr 2026 → 05 Jul 2026"),
-    )
-    c9.metric(
-        "Live Date Range",
-        str(warehouse.get("live_date_range") or "06 Jul 2026 → Latest"),
+        "Latest Review Date",
+        format_last_updated(warehouse.get("latest_review_date")),
     )
     st.caption(
-        f"Next Refresh Time: **{format_last_updated(warehouse.get('next_refresh_time') or _refresh.get('next_refresh_at'))}** · "
-        f"Latest Review Date: **{format_last_updated(warehouse.get('latest_review_date'))}**"
-    )
-    # Continuity labels
-    st.caption(
-        f"Total Historical Reviews: {int(warehouse.get('total_historical') or 0):,} · "
-        f"Total Live Reviews: {int(warehouse.get('total_live') or 0):,} · "
-        f"Merged Reviews: {int(warehouse.get('merged_reviews') or 0):,}"
+        f"Live Date Range: **{warehouse.get('live_date_range') or '06 Jul 2026 → Latest'}** · "
+        f"Next Refresh: **{format_last_updated(warehouse.get('next_refresh_time') or _refresh.get('next_refresh_at'))}**"
     )
 
 
@@ -313,16 +284,16 @@ _safe_section("Live Dashboard", _section_warehouse)
 def _section_ai_analysis() -> None:
     st.markdown("---")
     analysis_title = {
-        "historical": "Historical AI Analysis",
         "live": "Live AI Analysis",
-        "combined": "Combined AI Analysis",
+        "all": "All Reviews AI Analysis",
+        "combined": "All Reviews AI Analysis",
     }.get(data_source, "AI Analysis")
     st.header(analysis_title)
     mode_label = {
-        "historical": "Historical Reviews only (01 Apr 2026 → 05 Jul 2026)",
         "live": "Live Reviews only (06 Jul 2026 → Latest Available Review)",
-        "combined": "Historical + Live Reviews (merged)",
-    }.get(data_source, "Merged Reviews")
+        "all": "All Reviews (full merged warehouse)",
+        "combined": "All Reviews (full merged warehouse)",
+    }.get(data_source, "All Reviews")
     st.caption(f"Gemini / evidence analysis for: **{mode_label}**")
     conf = discovery.get("ai_confidence_score") or extended.get("confidence_score") or 0
     st.metric("Confidence Score", f"{conf}%")

@@ -211,72 +211,48 @@ div[data-testid="stMetric"] {
     if growth_opps == 0:
         growth_opps = len(insights.get("most_frequent_themes") or [])
 
+    total_reviews = int(
+        warehouse.get("total_reviews")
+        or warehouse.get("merged_reviews")
+        or stats.get("total")
+        or 0
+    )
+    live_reviews = int(warehouse.get("total_live") or 0)
+    playstore = int(warehouse.get("playstore_count") or playstore)
+    appstore = int(warehouse.get("appstore_count") or appstore)
+
     st.caption(
-        f"🟢 LIVE · 📚 Historical · {_format_last_updated(refresh.get('last_sync_at') or live_meta.get('last_updated'))} · "
+        f"🟢 LIVE · All Reviews · {_format_last_updated(refresh.get('last_sync_at') or live_meta.get('last_updated'))} · "
         f"Next refresh: {_format_last_updated(refresh.get('next_refresh_at'))}"
     )
 
     with st.container():
-        w1 = st.columns(3)
-        w1[0].metric(
-            "Historical Review Count",
-            f"{int(warehouse.get('total_historical') or 0):,}",
-        )
-        w1[1].metric(
-            "Live Review Count",
-            f"{int(warehouse.get('total_live') or 0):,}",
-        )
-        w1[2].metric(
-            "Merged Review Count",
-            f"{int(warehouse.get('merged_reviews') or stats.get('total') or 0):,}",
-        )
+        w1 = st.columns(4)
+        w1[0].metric("Total Reviews", f"{total_reviews:,}")
+        w1[1].metric("Live Reviews", f"{live_reviews:,}")
+        w1[2].metric("Google Play Reviews", f"{playstore:,}")
+        w1[3].metric("Apple App Store Reviews", f"{appstore:,}")
         w2 = st.columns(3)
         w2[0].metric("New Reviews Today", f"{int(warehouse.get('new_reviews_today') or 0):,}")
         w2[1].metric(
-            "New Reviews This Week",
-            f"{int(warehouse.get('new_reviews_this_week') or 0):,}",
-        )
-        w2[2].metric(
-            "Last Sync Time",
+            "Last Updated",
             _format_last_updated(
                 warehouse.get("last_sync_time")
                 or refresh.get("last_sync_at")
                 or live_meta.get("last_updated")
             ),
         )
-        w3 = st.columns(3)
-        w3[0].metric(
-            "Latest Live Review Date",
-            _format_last_updated(
-                warehouse.get("latest_live_review_date")
-                or warehouse.get("latest_review_date")
-            ),
-        )
-        w3[1].metric(
-            "Historical Date Range",
-            str(warehouse.get("historical_date_range") or "01 Apr 2026 → 05 Jul 2026"),
-        )
-        w3[2].metric(
-            "Live Date Range",
-            str(warehouse.get("live_date_range") or "06 Jul 2026 → Latest"),
+        w2[2].metric(
+            "Latest Review Date",
+            _format_last_updated(warehouse.get("latest_review_date")),
         )
         st.caption(
-            f"Next Refresh Time: {_format_last_updated(warehouse.get('next_refresh_time') or refresh.get('next_refresh_at'))} · "
-            f"Latest Review Date: {_format_last_updated(warehouse.get('latest_review_date'))}"
-        )
-        # Keep prior warehouse labels for continuity
-        st.caption(
-            f"Total Historical Reviews: {int(warehouse.get('total_historical') or 0):,} · "
-            f"Total Live Reviews: {int(warehouse.get('total_live') or 0):,} · "
-            f"Merged Reviews: {int(warehouse.get('merged_reviews') or 0):,}"
+            f"Live Date Range: {warehouse.get('live_date_range') or '06 Jul 2026 → Latest'} · "
+            f"Next Refresh: {_format_last_updated(warehouse.get('next_refresh_time') or refresh.get('next_refresh_at'))} · "
+            f"Target unique reviews: {int(warehouse.get('min_unique_target') or 600):,}"
         )
 
     with st.container():
-        r1 = st.columns(3)
-        r1[0].metric("Total Reviews", f"{int(stats.get('total') or 0):,}")
-        r1[1].metric("Google Play Reviews", f"{playstore:,}")
-        r1[2].metric("Apple App Store Reviews", f"{appstore:,}")
-
         r2 = st.columns(3)
         r2[0].metric("Positive Sentiment", f"{positive:,}")
         r2[1].metric("Negative Sentiment", f"{negative:,}")
@@ -294,9 +270,6 @@ div[data-testid="stMetric"] {
 
     dash_source = render_review_source_selector(key_prefix="dash")
     ensure_source_data_loaded(dash_source, key_prefix="dash")
-    if dash_source == "combined":
-        # Keep default auto-collect behavior for merged mode
-        pass
     dash_filters = render_review_filters(key_prefix="dash")
     try:
         filtered_dash = cached_filtered_dashboard(

@@ -1,38 +1,29 @@
 """
-Single source of truth for Historical / Live / Combined review filtering.
+Single source of truth for Live / All review filtering.
 
 ALWAYS filters on review_date (DB column `date`), never fetched_at / created_at.
+
+- live → review_date >= LIVE_START_DATE (06 Jul 2026 onward, open-ended)
+- all  → every review with a parseable review_date (full warehouse)
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
 from typing import Any
 
 import pandas as pd
 
-from src.config import (
-    HISTORICAL_END_DATE,
-    HISTORICAL_START_DATE,
-    LIVE_START_DATE,
-)
-
-HISTORICAL_EMPTY_MSG = (
-    "No historical reviews are currently stored for this date range."
-)
+from src.config import LIVE_START_DATE
 
 
 def _to_review_timestamp(series: pd.Series) -> pd.Series:
     """Convert review_date values to UTC timestamps (NaT if unparseable)."""
-    # format='mixed' / ISO8601 required: warehouse has both 'YYYY-MM-DD' and full ISO tz strings.
-    # A single inferred format drops date-only rows as NaT (which incorrectly emptied Historical).
     try:
         return pd.to_datetime(series, utc=True, errors="coerce", format="mixed")
     except (TypeError, ValueError):
         try:
             return pd.to_datetime(series, utc=True, errors="coerce", format="ISO8601")
         except (TypeError, ValueError):
-            # Last resort: parse row-by-row via calendar helper
             from src.review_dates import parse_review_date
 
             dates = [parse_review_date(v) for v in series.tolist()]
@@ -46,27 +37,34 @@ def reviews_list_to_frame(reviews: list[dict[str, Any]]) -> pd.DataFrame:
             columns=["date", "review_date", "source", "rating", "text", "sentiment"]
         )
     df = pd.DataFrame(reviews).copy()
-    # Canonical review_date from store review timestamp ONLY (never fetched_at)
     if "date" in df.columns:
         raw = df["date"]
     else:
         raw = pd.Series([None] * len(df))
-    # Do not prefer a separate review_date column when it is empty/NaN-heavy —
-    # always anchor on DB `date` first.
     df["review_date"] = _to_review_timestamp(raw)
     return df
 
 
+def normalize_data_source(data_source: str | None) -> str:
+    """Map legacy source names to live|all."""
+    mode = str(data_source or "all").lower().strip()
+    if mode in {"live"}:
+        return "live"
+    if mode in {"all", "combined", "historical", "merged"}:
+        # historical removed — treat as full warehouse
+        return "all"
+    return "all"
+
+
 def apply_source_date_filter(
     reviews: list[dict[str, Any]] | pd.DataFrame,
-    data_source: str = "combined",
+    data_source: str = "all",
 ) -> pd.DataFrame:
     """
     Filter reviews by Review Source using review_date only.
 
-    Historical: 2026-04-01 <= review_date.date <= 2026-07-05
-    Live:       review_date.date >= 2026-07-06  (open-ended)
-    Combined:   Historical ∪ Live
+    Live: review_date.date >= 06 Jul 2026 (open-ended)
+    All:  every row with a valid review_date
     """
     if isinstance(reviews, pd.DataFrame):
         df = reviews.copy()
@@ -81,30 +79,20 @@ def apply_source_date_filter(
     if df.empty:
         return df
 
-    # Calendar-date comparison (inclusive bounds) — avoids midnight Timestamp pitfalls
     cal = df["review_date"].dt.tz_convert("UTC").dt.date
-
-    hist_mask = (cal >= HISTORICAL_START_DATE) & (cal <= HISTORICAL_END_DATE)
     live_mask = cal >= LIVE_START_DATE
+    mode = normalize_data_source(data_source)
 
-    mode = str(data_source or "combined").lower()
-    if mode == "historical":
-        mask = hist_mask
-    elif mode == "live":
-        mask = live_mask
+    if mode == "live":
+        mask = live_mask & df["review_date"].notna()
     else:
-        mask = hist_mask | live_mask
+        # All Reviews — keep every parseable review_date (full merged warehouse)
+        mask = df["review_date"].notna()
 
-    # Drop rows with unparseable review_date (do NOT fall back to fetched_at)
-    mask = mask & df["review_date"].notna()
     out = df.loc[mask].copy()
-
-    # Flags for UI / Source column
     out_cal = out["review_date"].dt.tz_convert("UTC").dt.date
-    out["is_historical"] = (out_cal >= HISTORICAL_START_DATE) & (
-        out_cal <= HISTORICAL_END_DATE
-    )
     out["is_live"] = out_cal >= LIVE_START_DATE
+    out["is_historical"] = False  # feature removed
     return out
 
 
@@ -112,10 +100,7 @@ def apply_ui_date_range_filter(
     df: pd.DataFrame,
     date_range: str = "all",
 ) -> pd.DataFrame:
-    """
-    Optional UI rolling window — still uses review_date only (never fetched_at).
-    Applied AFTER source split.
-    """
+    """Optional UI rolling window — uses review_date only."""
     if df.empty or not date_range or str(date_range).lower() in {"all", "all time"}:
         return df
     days = {"24h": 1, "7d": 7, "30d": 30, "90d": 90}.get(str(date_range).lower())
@@ -132,29 +117,19 @@ def dataframe_to_review_dicts(df: pd.DataFrame) -> list[dict[str, Any]]:
     records = df.to_dict(orient="records")
     out: list[dict[str, Any]] = []
     for row in records:
-        # Normalize NaT / NaN for downstream JSON / SQLite-friendly code
         cleaned: dict[str, Any] = {}
         for k, v in row.items():
             if v is None or (isinstance(v, float) and pd.isna(v)):
                 cleaned[k] = None
             elif isinstance(v, pd.Timestamp):
-                if pd.isna(v):
-                    cleaned[k] = None
-                else:
-                    cleaned[k] = v.isoformat()
+                cleaned[k] = None if pd.isna(v) else v.isoformat()
             else:
                 try:
-                    if pd.isna(v):
-                        cleaned[k] = None
-                    else:
-                        cleaned[k] = v
+                    cleaned[k] = None if pd.isna(v) else v
                 except (TypeError, ValueError):
                     cleaned[k] = v
-        # Keep canonical aliases
         if cleaned.get("date") and not cleaned.get("review_date"):
             cleaned["review_date"] = cleaned["date"]
-        elif cleaned.get("review_date") and isinstance(cleaned["review_date"], str):
-            pass
         out.append(cleaned)
     return out
 
@@ -162,7 +137,7 @@ def dataframe_to_review_dicts(df: pd.DataFrame) -> list[dict[str, Any]]:
 def filter_reviews(
     reviews: list[dict[str, Any]],
     *,
-    data_source: str = "combined",
+    data_source: str = "all",
     date_range: str = "all",
     platforms: list[str] | None = None,
     ratings: list[int] | None = None,
@@ -192,9 +167,10 @@ def filter_reviews(
     if sentiments and "sentiment" in df.columns:
         sentiment_set = {str(s).strip().title() for s in sentiments if s}
         if sentiment_set:
-            df = df[df["sentiment"].astype(str).str.strip().str.title().isin(sentiment_set)]
+            df = df[
+                df["sentiment"].astype(str).str.strip().str.title().isin(sentiment_set)
+            ]
 
-    # Newest first
     if "review_date" in df.columns and not df.empty:
         df = df.sort_values("review_date", ascending=False, na_position="last")
 
@@ -202,7 +178,3 @@ def filter_reviews(
         df = df.head(int(limit))
 
     return dataframe_to_review_dicts(df)
-
-
-def historical_count(reviews: list[dict[str, Any]]) -> int:
-    return len(apply_source_date_filter(reviews, data_source="historical"))

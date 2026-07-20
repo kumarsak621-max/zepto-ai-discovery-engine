@@ -44,7 +44,7 @@ def collect_appstore_reviews(
     count = count or APPSTORE_REVIEW_COUNT
 
     collected: dict[str, dict[str, Any]] = {}
-    # Apple RSS returns up to ~50 reviews per page; fetch a few pages
+    # Apple RSS returns up to ~50 reviews per page (max ~10 pages typically)
     pages = max(1, min(10, (count + 49) // 50))
 
     for page in range(1, pages + 1):

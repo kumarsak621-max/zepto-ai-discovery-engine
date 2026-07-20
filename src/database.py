@@ -426,7 +426,7 @@ def get_pm_insights(
     """
     Aggregated Product Manager insights from advanced analysis fields.
 
-    Pass `reviews` to aggregate a pre-filtered set (historical / live / combined).
+    Pass `reviews` to aggregate a pre-filtered set (live / all).
     """
     reviews = reviews if reviews is not None else fetch_all_reviews(limit=limit, db_path=db_path)
     analyzed = [
@@ -655,7 +655,7 @@ def _parse_iso(value: Any) -> datetime | None:
 
 def fetch_reviews_filtered(
     *,
-    data_source: str = "combined",
+    data_source: str = "all",
     date_range: str = "all",
     platforms: list[str] | None = None,
     ratings: list[int] | None = None,
@@ -666,24 +666,20 @@ def fetch_reviews_filtered(
     db_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Query reviews with fixed Historical / Live calendar date separation.
-
-    Filtering ALWAYS uses review_date (DB `date` column) — never fetched_at.
+    Query reviews by Review Source (review_date only — never fetched_at).
 
     data_source:
-      - historical → review_date in [01 Apr 2026, 05 Jul 2026] inclusive
-      - live → review_date >= 06 Jul 2026 (open-ended to latest)
-      - combined → historical ∪ live
+      - live → review_date >= 06 Jul 2026 (open-ended)
+      - all  → every review with a parseable review_date
     """
-    _ = (live_window_days, live_batch_keys)  # API compatibility
-    from src.review_filter import filter_reviews
+    _ = (live_window_days, live_batch_keys)
+    from src.review_filter import filter_reviews, normalize_data_source
 
-    # Load warehouse (no fetched_at fallback). Cap high enough for full historical set.
     fetch_cap = None if limit is None else max(int(limit) * 50, 20000)
     rows = fetch_all_reviews(limit=fetch_cap, db_path=db_path)
     return filter_reviews(
         rows,
-        data_source=data_source,
+        data_source=normalize_data_source(data_source),
         date_range=date_range,
         platforms=platforms,
         ratings=ratings,
@@ -697,11 +693,11 @@ def get_review_warehouse_stats(
     *,
     live_window_days: int = 7,
 ) -> dict[str, Any]:
-    """KPIs for Historical / Live / Merged — counts use review_date only."""
+    """KPIs — Total / Live counts use review_date; Total = unique warehouse size."""
     from datetime import timedelta
 
-    from src.config import LIVE_START_DATE
-    from src.review_dates import historical_range_label, live_range_label, parse_review_date
+    from src.config import LIVE_START_DATE, MIN_UNIQUE_REVIEWS
+    from src.review_dates import live_range_label, parse_review_date
     from src.review_filter import apply_source_date_filter
 
     now = datetime.now(timezone.utc)
@@ -709,9 +705,10 @@ def get_review_warehouse_stats(
     week_cutoff = now - timedelta(days=7)
 
     rows = fetch_all_reviews(limit=None, db_path=db_path)
-    historical = len(apply_source_date_filter(rows, data_source="historical"))
+    total = len(rows)
     live = len(apply_source_date_filter(rows, data_source="live"))
 
+    by_source = {"playstore": 0, "appstore": 0}
     new_today = 0
     new_week = 0
     latest_review: datetime | None = None
@@ -719,7 +716,9 @@ def get_review_warehouse_stats(
     last_sync: datetime | None = None
 
     for row in rows:
-        # review_date only for review timestamps / live latest
+        src = str(row.get("source") or "").lower()
+        if src in by_source:
+            by_source[src] += 1
         cal = parse_review_date(row.get("date") or row.get("review_date"))
         event_dt = _parse_iso(row.get("date") or row.get("review_date"))
         fetched = (
@@ -757,10 +756,13 @@ def get_review_warehouse_stats(
         pass
 
     return {
-        "total_historical": historical,
+        "total_reviews": total,
+        "total_historical": total,  # legacy key → full warehouse
         "total_live": live,
-        "older_reviews": historical,
-        "merged_reviews": historical + live,
+        "older_reviews": max(0, total - live),
+        "merged_reviews": total,
+        "playstore_count": by_source.get("playstore", 0),
+        "appstore_count": by_source.get("appstore", 0),
         "new_reviews_today": new_today,
         "new_reviews_this_week": new_week,
         "last_sync_time": last_sync.isoformat() if last_sync else None,
@@ -769,8 +771,8 @@ def get_review_warehouse_stats(
         "latest_live_review_date": (
             latest_live_date.isoformat() if latest_live_date else None
         ),
-        "historical_date_range": historical_range_label(),
         "live_date_range": live_range_label(latest_live_date),
         "live_window_days": live_window_days,
-        "has_historical_data": historical > 0,
+        "min_unique_target": MIN_UNIQUE_REVIEWS,
+        "meets_min_unique": total >= MIN_UNIQUE_REVIEWS,
     }

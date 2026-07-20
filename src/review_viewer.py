@@ -1,7 +1,5 @@
 """
 Review viewing helpers — display table, keyword search, and CSV/Excel export.
-
-Additive only: does not change collection, Gemini, or warehouse logic.
 """
 
 from __future__ import annotations
@@ -23,19 +21,17 @@ def _platform_label(source: Any) -> str:
 
 
 def _review_source_label(row: dict[str, Any], *, data_source: str) -> str:
-    """Label each row as Historical / Live from review_date only (never fetched_at)."""
+    """Label each row Live vs Stored using review_date only."""
     from src.review_dates import classify_review_date, parse_review_date
 
     cal = parse_review_date(row.get("date") or row.get("review_date"))
     label = classify_review_date(cal)
-    if label in {"Historical", "Live"}:
-        return label
-    mode = str(data_source or "combined").lower()
-    if mode == "historical":
-        return "Historical"
+    if label == "Live":
+        return "Live"
+    mode = str(data_source or "all").lower()
     if mode == "live":
         return "Live"
-    return "Other"
+    return "All"
 
 
 def _format_date(value: Any) -> str:
@@ -56,21 +52,20 @@ def _format_date(value: Any) -> str:
 def reviews_to_display_df(
     reviews: list[dict[str, Any]],
     *,
-    data_source: str = "combined",
+    data_source: str = "all",
 ) -> pd.DataFrame:
     """Build the interactive Visible Reviews table."""
+    cols = [
+        "Date",
+        "Platform",
+        "Rating",
+        "Review Text",
+        "Sentiment",
+        "Reviewer",
+        "Source",
+    ]
     if not reviews:
-        return pd.DataFrame(
-            columns=[
-                "Review Date",
-                "Platform",
-                "Rating",
-                "Review Text",
-                "Sentiment",
-                "Source",
-                "Reviewer Name",
-            ]
-        )
+        return pd.DataFrame(columns=cols)
 
     rows = []
     for r in reviews:
@@ -83,13 +78,13 @@ def reviews_to_display_df(
         )
         rows.append(
             {
-                "Review Date": _format_date(r.get("date") or r.get("review_date")),
+                "Date": _format_date(r.get("date") or r.get("review_date")),
                 "Platform": _platform_label(r.get("source")),
                 "Rating": r.get("rating"),
                 "Review Text": str(text),
                 "Sentiment": (r.get("sentiment") or "—"),
+                "Reviewer": str(name).strip() or "—",
                 "Source": _review_source_label(r, data_source=data_source),
-                "Reviewer Name": str(name).strip() or "—",
             }
         )
     return pd.DataFrame(rows)
@@ -118,7 +113,6 @@ def dataframe_to_csv_bytes(df: pd.DataFrame) -> bytes:
 
 def dataframe_to_excel_bytes(df: pd.DataFrame) -> bytes:
     buffer = BytesIO()
-    # openpyxl is already in requirements.txt
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Reviews")
     return buffer.getvalue()

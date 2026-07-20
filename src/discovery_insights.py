@@ -976,7 +976,7 @@ def build_discovery_dashboard(
     reviews: list[dict[str, Any]] | None = None,
     *,
     limit: int = 2000,
-    analysis_mode: str = "combined",
+    analysis_mode: str = "all",
 ) -> dict[str, Any]:
     """Full payload for the PM Discovery dashboard. Never raises to the UI layer."""
     from src.database import fetch_all_reviews

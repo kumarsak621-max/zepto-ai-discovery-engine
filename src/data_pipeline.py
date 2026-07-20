@@ -16,9 +16,11 @@ import pandas as pd
 
 from src.appstore_scraper import collect_appstore_or_empty
 from src.config import (
+    APPSTORE_REVIEW_COUNT,
     LIVE_BATCH_PATH,
     LIVE_CACHE_TTL_HOURS,
     LIVE_META_PATH,
+    MIN_UNIQUE_REVIEWS,
     PLAYSTORE_CACHE_TTL_HOURS,
     PLAYSTORE_REVIEW_COUNT,
     has_appstore,
@@ -29,6 +31,7 @@ from src.database import (
     content_hash,
     fetch_unanalyzed,
     finish_pipeline_run,
+    get_collection_stats,
     init_db,
     start_pipeline_run,
     update_analysis,
@@ -331,6 +334,10 @@ def run_live_review_analysis(
             progress_callback(pct, msg)
 
     try:
+        target = max(
+            int(playstore_count or PLAYSTORE_REVIEW_COUNT),
+            int(MIN_UNIQUE_REVIEWS),
+        )
         # --- Step 1: Google Play ---
         _progress(0.05, "Collecting Google Play reviews…")
         try:
@@ -340,8 +347,13 @@ def run_live_review_analysis(
                 logger.warning("Play Store metadata failed: %s", meta_exc)
 
             ttl = int(PLAYSTORE_CACHE_TTL_HOURS) * 3600
-            target = playstore_count or PLAYSTORE_REVIEW_COUNT
-            if not force_refresh and cache_is_fresh(ttl_seconds=ttl):
+            db_total = int(get_collection_stats().get("total") or 0)
+            need_top_up = db_total < int(MIN_UNIQUE_REVIEWS)
+            if (
+                not force_refresh
+                and not need_top_up
+                and cache_is_fresh(ttl_seconds=ttl)
+            ):
                 playstore = load_reviews_from_csv()
                 used_cache = True
                 _progress(0.25, "Using cached Google Play reviews…")
@@ -366,7 +378,9 @@ def run_live_review_analysis(
         _progress(0.40, "Collecting App Store reviews…")
         if has_appstore():
             try:
-                appstore = collect_appstore_or_empty()
+                appstore = collect_appstore_or_empty(
+                    count=max(int(APPSTORE_REVIEW_COUNT), 500)
+                )
                 counts["appstore_count"] = len(appstore)
                 collected.extend(appstore)
                 if not appstore:
@@ -396,6 +410,54 @@ def run_live_review_analysis(
         inserted = bulk_upsert(merged)
         counts["new_reviews"] = inserted
         live_batch_keys = save_live_batch_keys(merged)
+
+        # --- Top-up toward MIN_UNIQUE_REVIEWS using real store pages only ---
+        warehouse_total = int(get_collection_stats().get("total") or 0)
+        top_up_round = 0
+        while warehouse_total < int(MIN_UNIQUE_REVIEWS) and top_up_round < 3:
+            top_up_round += 1
+            shortfall = int(MIN_UNIQUE_REVIEWS) - warehouse_total
+            _progress(
+                0.78,
+                f"Topping up warehouse ({warehouse_total}/{MIN_UNIQUE_REVIEWS})…",
+            )
+            extra: list[dict[str, Any]] = []
+            try:
+                more_play = collect_playstore_reviews(
+                    count=max(target, warehouse_total + shortfall + 100),
+                    lang="en",
+                    country="in",
+                )
+                extra.extend(more_play)
+                counts["playstore_count"] = max(
+                    counts["playstore_count"], len(more_play)
+                )
+            except Exception as exc:
+                logger.warning("Play Store top-up failed: %s", exc)
+                source_messages.append(f"Play Store top-up stopped: {exc}")
+            if has_appstore():
+                try:
+                    more_ios = collect_appstore_or_empty(
+                        count=max(int(APPSTORE_REVIEW_COUNT), 500)
+                    )
+                    extra.extend(more_ios)
+                    counts["appstore_count"] = max(
+                        counts["appstore_count"], len(more_ios)
+                    )
+                except Exception as exc:
+                    logger.warning("App Store top-up failed: %s", exc)
+            if not extra:
+                break
+            extra_merged = merge_and_dedupe_reviews(extra)
+            added = bulk_upsert(extra_merged)
+            counts["new_reviews"] += added
+            new_total = int(get_collection_stats().get("total") or 0)
+            if new_total <= warehouse_total:
+                # APIs returned no additional unique reviews
+                break
+            warehouse_total = new_total
+        counts["warehouse_total"] = warehouse_total
+        counts["min_unique_target"] = int(MIN_UNIQUE_REVIEWS)
 
         # --- Step 6: Gemini ---
         _progress(0.88, "Running Gemini analysis on merged dataset…")

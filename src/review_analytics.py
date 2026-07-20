@@ -1,7 +1,7 @@
 """
 Filtered review analytics, trend insights, and chart series for the Discovery Engine.
 
-Builds on the SQLite historical warehouse without deleting or mutating stored reviews.
+Builds on the SQLite review warehouse without deleting or mutating stored reviews.
 """
 
 from __future__ import annotations
@@ -13,8 +13,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from src.config import (
-    HISTORICAL_END_DATE,
-    HISTORICAL_START_DATE,
     LIVE_REVIEW_WINDOW_DAYS,
     LIVE_START_DATE,
 )
@@ -23,7 +21,7 @@ from src.database import (
     get_pm_insights,
     get_review_warehouse_stats,
 )
-from src.review_dates import historical_range_label, live_range_label
+from src.review_dates import live_range_label
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +52,7 @@ def _parse_dt(value: Any) -> datetime | None:
 
 def apply_review_filters(
     *,
-    data_source: str = "combined",
+    data_source: str = "all",
     date_range: str = "all",
     platform: str = "both",
     ratings: list[int] | None = None,
@@ -358,7 +356,7 @@ def build_extended_analysis_sections(reviews: list[dict[str, Any]]) -> dict[str,
 
 def build_filtered_dashboard(
     *,
-    data_source: str = "combined",
+    data_source: str = "all",
     date_range: str = "all",
     platform: str = "both",
     ratings: list[int] | None = None,
@@ -450,10 +448,7 @@ def build_filtered_dashboard(
         "sentiments": sentiments or [],
         "review_count": len(reviews),
         "live_window_days": LIVE_REVIEW_WINDOW_DAYS,
-        "historical_date_range": historical_range_label(),
         "live_date_range": live_range_label(),
-        "historical_start": HISTORICAL_START_DATE.isoformat(),
-        "historical_end": HISTORICAL_END_DATE.isoformat(),
         "live_start": LIVE_START_DATE.isoformat(),
     }
     # Refresh KPIs for filtered set

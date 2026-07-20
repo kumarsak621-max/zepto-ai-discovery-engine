@@ -1,8 +1,7 @@
 """
 Shared Review Source controls — selector, filters, visible table, export.
 
-Additive UI helpers used by Customer Insights and Dashboard.
-Does not remove or replace existing page sections.
+Review Source options: Live Reviews | All Reviews (Historical removed).
 """
 
 from __future__ import annotations
@@ -20,16 +19,17 @@ from src.review_viewer import (
 )
 
 SOURCE_OPTIONS = [
-    "Historical Reviews",
     "Live Reviews",
-    "Historical + Live Reviews",
+    "All Reviews",
 ]
 
 SOURCE_MAP = {
-    "Historical Reviews": "historical",
     "Live Reviews": "live",
-    "Historical + Live Reviews": "combined",
-    "Historical + Live": "combined",
+    "All Reviews": "all",
+    # Legacy session values → All Reviews
+    "Historical Reviews": "all",
+    "Historical + Live Reviews": "all",
+    "Historical + Live": "all",
 }
 
 DATE_OPTIONS = [
@@ -48,31 +48,37 @@ DATE_MAP = {
     "Last 90 Days": "90d",
 }
 
+_LEGACY_LABELS = {
+    "Historical Reviews",
+    "Historical + Live Reviews",
+    "Historical + Live",
+}
+
 
 def render_review_source_selector(*, key_prefix: str = "ci") -> str:
-    """Render Review Source radio. Returns data_source: historical|live|combined."""
+    """Render Review Source radio. Returns data_source: live|all."""
     st.subheader("Review Source")
     legacy_key = f"{key_prefix}_data_source"
-    if st.session_state.get(legacy_key) == "Historical + Live":
-        st.session_state[legacy_key] = "Historical + Live Reviews"
+    current = st.session_state.get(legacy_key)
+    if current in _LEGACY_LABELS or current not in SOURCE_OPTIONS:
+        st.session_state[legacy_key] = "All Reviews"
 
     label = st.radio(
         "Select which reviews to view and analyze",
         options=SOURCE_OPTIONS,
-        index=2,
+        index=1,  # Default: All Reviews
         horizontal=True,
         key=legacy_key,
     )
-    return SOURCE_MAP.get(label, "combined")
+    return SOURCE_MAP.get(label, "all")
 
 
 def render_review_filters(*, key_prefix: str = "ci") -> dict[str, Any]:
     """Render date/platform/rating/sentiment/keyword filters."""
     with st.expander("Filters", expanded=True):
         st.caption(
-            "Review Source date bounds always apply first "
-            "(Historical: 01 Apr–05 Jul 2026 · Live: 06 Jul 2026 onward). "
-            "Use Date Range = All Time to see the full source set."
+            "Live Reviews = 06 Jul 2026 onward · All Reviews = full merged warehouse. "
+            "Use Date Range = All Time to see the complete selected source."
         )
         f1, f2, f3, f4 = st.columns(4)
         with f1:
@@ -126,19 +132,15 @@ def render_review_filters(*, key_prefix: str = "ci") -> dict[str, Any]:
 
 def ensure_source_data_loaded(data_source: str, *, key_prefix: str = "ci") -> None:
     """
-    Historical → do not fetch (DB/cache only).
-    Live → force-fetch newest store reviews once per switch into Live.
-    Combined → use normal auto-bootstrap (caller may still sync on startup).
+    Live / All → ensure store sync (force once when switching into Live).
     """
     from src.auto_bootstrap import ensure_live_reviews_loaded
     from src.streamlit_cache import clear_data_caches
 
     mode_key = f"_{key_prefix}_live_fetch_mode"
-    if data_source == "historical":
-        st.session_state[mode_key] = "historical"
-        return
+    mode = str(data_source or "all").lower()
 
-    if data_source == "live":
+    if mode == "live":
         if st.session_state.get(mode_key) != "live":
             try:
                 with st.spinner("Fetching newest Google Play and App Store reviews…"):
@@ -146,13 +148,12 @@ def ensure_source_data_loaded(data_source: str, *, key_prefix: str = "ci") -> No
                     clear_data_caches()
             except Exception as exc:
                 st.warning(
-                    f"Live fetch could not complete; showing last live batch if available. ({exc})"
+                    f"Live fetch could not complete; showing stored live reviews. ({exc})"
                 )
             st.session_state[mode_key] = "live"
         return
 
-    # combined
-    st.session_state[mode_key] = "combined"
+    st.session_state[mode_key] = "all"
 
 
 def render_visible_reviews_table(
@@ -162,34 +163,21 @@ def render_visible_reviews_table(
     keyword: str = "",
     key_prefix: str = "ci",
 ) -> list[dict[str, Any]]:
-    """Render interactive Visible Reviews table + CSV/Excel export. Returns visible rows."""
-    from src.review_filter import HISTORICAL_EMPTY_MSG
-
+    """Render interactive Visible Reviews table + CSV/Excel export."""
     visible = filter_by_keyword(reviews, keyword)
     st.markdown("---")
     st.header("Visible Reviews")
     captions = {
-        "historical": "Historical Reviews — 01 Apr 2026 to 05 Jul 2026 (inclusive)",
         "live": "Live Reviews — 06 Jul 2026 to Latest Available Review (auto-updates)",
-        "combined": "Historical + Live Reviews — merged & deduplicated",
+        "all": "All Reviews — full merged warehouse (deduplicated)",
+        "combined": "All Reviews — full merged warehouse (deduplicated)",
     }
-    st.caption(captions.get(data_source, "Reviews"))
-
-    if str(data_source).lower() == "historical" and not visible:
-        st.warning(HISTORICAL_EMPTY_MSG)
-        return visible
+    st.caption(captions.get(str(data_source).lower(), "Reviews"))
 
     display_df = reviews_to_display_df(visible, data_source=data_source)
-    # Prefer "Source" column name (spec); keep backward compatibility
-    if "Review Source" in display_df.columns and "Source" not in display_df.columns:
-        display_df = display_df.rename(columns={"Review Source": "Source"})
-
     st.metric("Reviews shown", f"{len(display_df):,}")
     if display_df.empty:
-        if str(data_source).lower() == "historical":
-            st.warning(HISTORICAL_EMPTY_MSG)
-        else:
-            st.info("No reviews match the current filters or keyword search.")
+        st.info("No reviews match the current filters or keyword search.")
         return visible
 
     st.dataframe(
@@ -198,20 +186,20 @@ def render_visible_reviews_table(
         hide_index=True,
         height=min(560, 80 + min(len(display_df), 18) * 35),
         column_config={
-            "Review Date": st.column_config.TextColumn("Review Date", width="small"),
+            "Date": st.column_config.TextColumn("Date", width="small"),
             "Platform": st.column_config.TextColumn("Platform", width="small"),
             "Rating": st.column_config.NumberColumn("Rating", format="%.1f", width="small"),
             "Review Text": st.column_config.TextColumn("Review Text", width="large"),
             "Sentiment": st.column_config.TextColumn("Sentiment", width="small"),
+            "Reviewer": st.column_config.TextColumn("Reviewer", width="medium"),
             "Source": st.column_config.TextColumn("Source", width="small"),
-            "Reviewer Name": st.column_config.TextColumn("Reviewer Name", width="medium"),
         },
     )
 
     export_cols = st.columns([1, 1, 2])
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
-    slug = {"historical": "historical", "live": "live", "combined": "historical_live"}.get(
-        data_source, "reviews"
+    slug = {"live": "live", "all": "all", "combined": "all"}.get(
+        str(data_source).lower(), "reviews"
     )
     with export_cols[0]:
         st.download_button(
