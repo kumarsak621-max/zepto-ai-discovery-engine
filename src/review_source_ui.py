@@ -60,25 +60,46 @@ def render_review_source_selector(*, key_prefix: str = "ci") -> str:
 
 def render_review_filters(*, key_prefix: str = "ci") -> dict[str, Any]:
     """
-    Keyword search only.
+    Store filter + keyword search.
 
-    Date / Platform / Rating / Sentiment filter controls were removed from the UI.
-    Underlying data still loads in full for the selected Review Source (live|all).
+    Platform options: All Reviews | Google Play Store only | Apple App Store only.
+    Live/All Review Source selector remains separate.
     """
     st.caption(
-        "Zepto product reviews from Google Play and Apple App Store. "
-        "Live Reviews = 06 Jul 2026 onward · All Reviews = full merged warehouse."
+        "Reviews are collected from Google Play Store and Apple App Store, "
+        "merged and deduplicated before AI analysis. "
+        "Live Reviews = 06 Jul 2026 onward · All Reviews = full warehouse."
     )
-    keyword = st.text_input(
-        "Search reviews",
-        value="",
-        placeholder="Search review text or reviewer name…",
-        key=f"{key_prefix}_keyword_search",
-    )
+    f1, f2 = st.columns([1, 2])
+    with f1:
+        platform_label = st.selectbox(
+            "Store",
+            options=[
+                "All Reviews",
+                "Google Play Store only",
+                "Apple App Store only",
+            ],
+            index=0,
+            key=f"{key_prefix}_platform",
+            help="Filter which store’s reviews are shown and analyzed on this page.",
+        )
+    with f2:
+        keyword = st.text_input(
+            "Search reviews",
+            value="",
+            placeholder="Search review text or reviewer name…",
+            key=f"{key_prefix}_keyword_search",
+        )
+
+    platform = {
+        "All Reviews": "both",
+        "Google Play Store only": "playstore",
+        "Apple App Store only": "appstore",
+    }.get(platform_label, "both")
 
     return {
         "date_range": "all",
-        "platform": "both",
+        "platform": platform,
         "ratings": [],
         "sentiments": [],
         "keyword": keyword,
@@ -160,7 +181,7 @@ def render_visible_reviews_table(
         height=min(560, 80 + min(len(display_df), 18) * 35),
         column_config={
             "Review Date": st.column_config.TextColumn("Review Date", width="small"),
-            "Platform": st.column_config.TextColumn("Platform", width="small"),
+            "Source": st.column_config.TextColumn("Source", width="medium"),
             "Rating": st.column_config.NumberColumn("Rating", format="%.1f", width="small"),
             "Review Text": st.column_config.TextColumn("Review Text", width="large"),
             "Sentiment": st.column_config.TextColumn("Sentiment", width="small"),

@@ -1113,6 +1113,21 @@ def build_discovery_dashboard(
     except Exception:
         stats = {"by_source": {}, "total": len(reviews)}
 
+    by_src = stats.get("by_source") or {}
+    play_db = int(by_src.get("playstore") or 0)
+    apple_db = int(by_src.get("appstore") or 0)
+    play_n = play_db or int(live_meta.get("playstore_count") or 0)
+    apple_n = apple_db or int(live_meta.get("appstore_count") or 0)
+    # Merged store reviews = Play + Apple only (excludes reddit/social)
+    merged_n = play_n + apple_n
+    if merged_n <= 0:
+        merged_n = int(
+            live_meta.get("merged_count")
+            or insights.get("total_reviews")
+            or len(reviews)
+            or 0
+        )
+
     payload = {
         "reviews": reviews,
         "insights": insights,
@@ -1122,19 +1137,12 @@ def build_discovery_dashboard(
         "discovery": discovery,
         "validation": validation,
         "review_sources": {
-            "Google Play Reviews": int(live_meta.get("playstore_count") or 0),
-            "Apple App Store Reviews": int(live_meta.get("appstore_count") or 0),
-            "Merged Reviews": int(
-                live_meta.get("merged_count") or insights.get("total_reviews") or len(reviews)
-            ),
-            **{
-                str(k).replace("_", " ").title(): int(v)
-                for k, v in (stats.get("by_source") or {}).items()
-                if str(k).lower() != "manual"
-            },
+            "Google Play Reviews": play_n,
+            "Apple App Store Reviews": apple_n,
+            "Merged Reviews": merged_n,
         },
         "review_kpis": {
-            "Total Reviews": insights.get("total_reviews") or len(reviews),
+            "Total Reviews": insights.get("total_reviews") or len(reviews) or merged_n,
             "Analyzed Reviews": insights.get("analyzed_count") or 0,
             "Average Rating": insights.get("avg_rating"),
             "Unique Themes": len(insights.get("most_frequent_themes") or []),

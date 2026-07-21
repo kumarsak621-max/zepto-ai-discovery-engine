@@ -18,10 +18,18 @@ MAX_DISPLAY_REVIEWS_PER_DAY = 5
 
 
 def _platform_label(source: Any) -> str:
+    """Display label for store source column."""
     key = str(source or "").strip().lower()
-    if key in {"playstore", "google play", "google_play", "play"}:
-        return "Google Play"
-    if key in {"appstore", "apple app store", "app_store", "ios", "apple"}:
+    if key in {"playstore", "google play", "google_play", "google play store", "play"}:
+        return "Google Play Store"
+    if key in {
+        "appstore",
+        "apple app store",
+        "app_store",
+        "ios",
+        "apple",
+        "apple store",
+    }:
         return "Apple App Store"
     return str(source or "Unknown").replace("_", " ").title()
 
@@ -87,7 +95,7 @@ def reviews_to_display_df(
     _ = data_source  # kept for call-site compatibility
     cols = [
         "Review Date",
-        "Platform",
+        "Source",
         "Rating",
         "Review Text",
         "Sentiment",
@@ -114,7 +122,7 @@ def reviews_to_display_df(
         rows.append(
             {
                 "Review Date": _format_date(r.get("date") or r.get("review_date")),
-                "Platform": _platform_label(r.get("source")),
+                "Source": _platform_label(r.get("source")),
                 "Rating": r.get("rating"),
                 "Review Text": str(text),
                 "Sentiment": (r.get("sentiment") or "—"),

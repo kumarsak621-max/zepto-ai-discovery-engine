@@ -56,6 +56,25 @@ def ensure_live_reviews_loaded(*, force: bool = False) -> dict[str, Any]:
         if result.get("status") == "success":
             clear_data_caches()
             warning = ""
+            msgs = [str(m) for m in (result.get("source_messages") or [])]
+            appstore_issue = any(
+                ("App Store" in m or "Apple" in m)
+                and any(
+                    tok in m
+                    for tok in ("unavailable", "no reviews", "failed", "not configured", "error")
+                )
+                for m in msgs
+            )
+            play_count = int(result.get("playstore_count") or 0)
+            if play_count <= 0:
+                play_count = int(
+                    (get_collection_stats().get("by_source") or {}).get("playstore") or 0
+                )
+            if appstore_issue and play_count > 0:
+                warning = (
+                    "Apple App Store reviews could not be refreshed right now. "
+                    "Google Play Store reviews are still available and shown below."
+                )
         elif result.get("status") == "skipped":
             warning = ""
         else:
@@ -122,11 +141,11 @@ def render_auto_status_sidebar() -> None:
     )
     st.sidebar.caption(refresh.get("relative") or "")
     st.sidebar.caption(
-        f"Play: {meta.get('playstore_count', 0)} · "
-        f"App Store: {meta.get('appstore_count', 0)} · "
-        f"Merged: {meta.get('merged_count', 0)}"
+        f"Google Play Store: {meta.get('playstore_count', 0)} · "
+        f"Apple App Store: {meta.get('appstore_count', 0)} · "
+        f"Total: {meta.get('merged_count', 0)}"
     )
     st.sidebar.caption(
-        f"Sources: Google Play (`{PLAYSTORE_APP_ID}`)"
-        + (", Apple App Store" if has_appstore() else "")
+        f"Sources: Google Play Store (`{PLAYSTORE_APP_ID}`)"
+        + (", Apple App Store" if has_appstore() else " · Apple App Store disabled")
     )

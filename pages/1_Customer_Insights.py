@@ -180,7 +180,9 @@ trend_insights = dash.get("trend_insights") or {}
 chart_series = dash.get("chart_series") or {}
 extended = dash.get("extended_analysis") or {}
 
-_tc = int(warehouse.get("total_reviews") or warehouse.get("merged_reviews") or 0)
+_play_c = int(warehouse.get("playstore_count") or 0)
+_apple_c = int(warehouse.get("appstore_count") or 0)
+_tc = _play_c + _apple_c
 _lc = int(warehouse.get("total_live") or 0)
 _source_label = {
     "live": "Live Reviews",
@@ -188,7 +190,8 @@ _source_label = {
     "combined": "All Reviews",
 }.get(data_source, "All Reviews")
 st.caption(
-    f"Warehouse · Total: **{_tc:,}** · "
+    f"Store reviews · Total: **{_tc:,}** "
+    f"(Google Play: **{_play_c:,}** · Apple App Store: **{_apple_c:,}**) · "
     f"Live (06 Jul 2026→latest): **{_lc:,}** · "
     f"Loaded for analysis: **{len(reviews):,}** "
     f"({_source_label})"
@@ -255,14 +258,13 @@ _safe_section("Visible Reviews", _section_visible_reviews)
 def _section_warehouse() -> None:
     st.markdown("---")
     st.header("Live Dashboard")
+    _play_n = int(warehouse.get("playstore_count") or 0)
+    _apple_n = int(warehouse.get("appstore_count") or 0)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric(
-        "Total Reviews",
-        f"{int(warehouse.get('total_reviews') or warehouse.get('merged_reviews') or 0):,}",
-    )
+    c1.metric("Total Reviews", f"{_play_n + _apple_n:,}")
     c2.metric("Live Reviews", f"{int(warehouse.get('total_live') or 0):,}")
-    c3.metric("Google Play Reviews", f"{int(warehouse.get('playstore_count') or 0):,}")
-    c4.metric("Apple App Store Reviews", f"{int(warehouse.get('appstore_count') or 0):,}")
+    c3.metric("Google Play Store Reviews", f"{_play_n:,}")
+    c4.metric("Apple App Store Reviews", f"{_apple_n:,}")
     c5, c6, c7 = st.columns(3)
     c5.metric("New Reviews Today", f"{int(warehouse.get('new_reviews_today') or 0):,}")
     c6.metric(
@@ -482,11 +484,16 @@ def _section_sources() -> None:
         "Merged Reviews",
     ]
     cols = st.columns(3)
+    labels = {
+        "Google Play Reviews": "Google Play Store Reviews",
+        "Apple App Store Reviews": "Apple App Store Reviews",
+        "Merged Reviews": "Total Reviews",
+    }
     for i, key in enumerate(src_keys):
         try:
-            cols[i].metric(key, f"{int(review_sources.get(key, 0) or 0):,}")
+            cols[i].metric(labels.get(key, key), f"{int(review_sources.get(key, 0) or 0):,}")
         except Exception:
-            cols[i].metric(key, "0")
+            cols[i].metric(labels.get(key, key), "0")
     extra = {
         k: int(v)
         for k, v in review_sources.items()

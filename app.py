@@ -57,9 +57,16 @@ def _format_last_updated(ts: str | None) -> str:
 
 def _source_label(source: Any) -> str:
     key = str(source or "").strip().lower()
-    if key in {"playstore", "google play", "google_play"}:
-        return "Google Play"
-    if key in {"appstore", "apple app store", "app_store", "ios"}:
+    if key in {"playstore", "google play", "google_play", "google play store", "play"}:
+        return "Google Play Store"
+    if key in {
+        "appstore",
+        "apple app store",
+        "app_store",
+        "ios",
+        "apple",
+        "apple store",
+    }:
         return "Apple App Store"
     return str(source or "Unknown").replace("_", " ").title()
 
@@ -234,15 +241,11 @@ div[data-testid="stMetric"] {
     if growth_opps == 0:
         growth_opps = len(insights.get("most_frequent_themes") or [])
 
-    total_reviews = int(
-        warehouse.get("total_reviews")
-        or warehouse.get("merged_reviews")
-        or stats.get("total")
-        or 0
-    )
     live_reviews = int(warehouse.get("total_live") or 0)
     playstore = int(warehouse.get("playstore_count") or playstore)
     appstore = int(warehouse.get("appstore_count") or appstore)
+    # Total Reviews KPI = Google Play + Apple App Store only (deduplicated)
+    total_reviews = playstore + appstore
 
     st.caption(
         f"🟢 LIVE · All Reviews · {_format_last_updated(refresh.get('last_sync_at') or live_meta.get('last_updated'))} · "
@@ -250,11 +253,16 @@ div[data-testid="stMetric"] {
     )
 
     with st.container():
-        w1 = st.columns(4)
+        w1 = st.columns(3)
         w1[0].metric("Total Reviews", f"{total_reviews:,}")
-        w1[1].metric("Live Reviews", f"{live_reviews:,}")
-        w1[2].metric("Google Play Reviews", f"{playstore:,}")
-        w1[3].metric("Apple App Store Reviews", f"{appstore:,}")
+        w1[1].metric("Google Play Store Reviews", f"{playstore:,}")
+        w1[2].metric("Apple App Store Reviews", f"{appstore:,}")
+        st.caption(
+            f"Total = Google Play Store + Apple App Store (deduplicated). "
+            f"Live Reviews: {live_reviews:,} · "
+            f"Live Date Range: {warehouse.get('live_date_range') or '06 Jul 2026 → Latest'} · "
+            f"Next Refresh: {_format_last_updated(warehouse.get('next_refresh_time') or refresh.get('next_refresh_at'))}"
+        )
         w2 = st.columns(3)
         w2[0].metric("New Reviews Today", f"{int(warehouse.get('new_reviews_today') or 0):,}")
         w2[1].metric(
@@ -268,11 +276,6 @@ div[data-testid="stMetric"] {
         w2[2].metric(
             "Latest Review Date",
             _format_last_updated(warehouse.get("latest_review_date")),
-        )
-        st.caption(
-            f"Live Date Range: {warehouse.get('live_date_range') or '06 Jul 2026 → Latest'} · "
-            f"Next Refresh: {_format_last_updated(warehouse.get('next_refresh_time') or refresh.get('next_refresh_at'))} · "
-            f"Target unique reviews: {int(warehouse.get('min_unique_target') or 600):,}"
         )
 
     with st.container():
@@ -326,10 +329,13 @@ div[data-testid="stMetric"] {
 
     with st.container():
         s1, s2, s3 = st.columns(3)
-        s1.markdown(f"**Google Play Reviews:** {playstore:,}")
+        s1.markdown(f"**Google Play Store Reviews:** {playstore:,}")
         s2.markdown(f"**Apple App Store Reviews:** {appstore:,}")
         s3.markdown(
-            f"**Last Updated:** {_format_last_updated(live_meta.get('last_updated'))}"
+            f"**Total Reviews:** {total_reviews:,}"
+        )
+        st.caption(
+            f"Last Updated: {_format_last_updated(live_meta.get('last_updated'))}"
         )
 
     try:
