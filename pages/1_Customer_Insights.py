@@ -22,7 +22,6 @@ from src.auto_bootstrap import (
 from src.database import init_db
 from src.gemini_status_ui import (
     render_gemini_all_keys_failed_warning,
-    render_gemini_key_caption,
 )
 from src.insights_ui import render_root_cause_analysis
 from src.paths import ensure_runtime_dirs
@@ -139,7 +138,6 @@ st.caption(
     f"Next Refresh: **{format_last_updated(_refresh.get('next_refresh_at'))}** "
     f"(auto every {_refresh.get('auto_refresh_minutes', 30)} min)"
 )
-render_gemini_key_caption()
 
 _filters = render_review_filters(key_prefix="ci")
 date_range = _filters["date_range"]
@@ -1057,11 +1055,6 @@ def _section_validation() -> None:
             "confidence scoring, and review consistency checks."
         )
     )
-    if discovery.get("source"):
-        st.caption(
-            f"Discovery synthesis source: **{discovery.get('source')}** "
-            "(gemini = live model; fallback = evidence-based heuristics when Gemini is unavailable)."
-        )
 
 
 _safe_section("Insight Validation", _section_validation)

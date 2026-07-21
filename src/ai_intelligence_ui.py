@@ -311,18 +311,12 @@ def render_ai_intelligence_section(
             from src.gemini_status_ui import render_gemini_all_keys_failed_warning
 
             render_gemini_all_keys_failed_warning(discovery=discovery)
-        except Exception as exc:
-            print(f"[AI DEBUG] warning render failed: {exc}", flush=True)
-            st.info(
-                "Showing the most recent successful AI analysis. "
-                "New analysis will retry automatically when Gemini is available."
+        except Exception:
+            st.warning(
+                "AI insights are temporarily unavailable. "
+                "The dashboard is displaying the most recent successfully analyzed insights. "
+                "Please try again later."
             )
-            try:
-                from src.gemini_status_ui import render_ai_debug_expander
-
-                render_ai_debug_expander(exc, discovery=discovery, expanded=True)
-            except Exception as nested:
-                print(f"[AI DEBUG] debug expander failed: {nested}", flush=True)
 
     m1 = st.columns(4)
     m1[0].metric("Reviews Processed", f"{int(snap['reviews_processed']):,}")

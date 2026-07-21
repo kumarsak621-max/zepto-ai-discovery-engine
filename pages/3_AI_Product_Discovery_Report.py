@@ -20,7 +20,6 @@ from src.auto_bootstrap import (
     render_auto_status_sidebar,
 )
 from src.database import init_db
-from src.gemini_status_ui import render_gemini_key_caption
 from src.paths import ensure_runtime_dirs
 from src.review_sync import get_refresh_status
 from src.streamlit_playstore import format_last_updated, render_last_updated_caption
@@ -155,7 +154,6 @@ try:
 except Exception:
     pass
 render_auto_collect_warning()
-render_gemini_key_caption()
 
 _refresh = get_refresh_status()
 try:
@@ -187,11 +185,10 @@ except Exception as exc:
     st.stop()
 
 meta = report.get("meta") or {}
-m1, m2, m3, m4 = st.columns(4)
+m1, m2, m3 = st.columns(3)
 m1.metric("Reviews Used", f"{int(meta.get('reviews_used') or 0):,}")
 m2.metric("Analyzed Reviews", f"{int(meta.get('analyzed_reviews') or 0):,}")
 m3.metric("AI Confidence", f"{float(meta.get('ai_confidence') or 0):.0f}%")
-m4.metric("Discovery Source", str(meta.get("discovery_source") or "evidence")[:24])
 st.caption(
     "Data sources: "
     + ", ".join(meta.get("sources") or ["Google Play", "Apple App Store"])

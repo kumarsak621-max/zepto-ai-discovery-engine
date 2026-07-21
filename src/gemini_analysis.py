@@ -453,6 +453,6 @@ Do not invent fake quotes that contradict the evidence.
             f"### Evidence\n{quotes}\n\n"
             f"### Root Cause\n{root}\n\n"
             f"### Product Opportunity\n{opportunity}\n\n"
-            f"_Note: AI analysis is temporarily unavailable. "
+            f"_Note: AI insights are temporarily unavailable. "
             f"Showing the most recent successfully analyzed insights from retrieved reviews._"
         )

@@ -18,7 +18,6 @@ from src.auto_bootstrap import (
 )
 from src.chatbot import EXAMPLE_QUESTIONS, SYSTEM_INTRO, ask_product_manager
 from src.database import init_db
-from src.gemini_status_ui import render_gemini_key_caption
 from src.paths import ensure_runtime_dirs
 from src.streamlit_cache import cached_vector_stats
 from src.streamlit_playstore import render_last_updated_caption
@@ -43,7 +42,6 @@ st.caption(
 )
 render_auto_collect_warning()
 render_last_updated_caption()
-render_gemini_key_caption()
 
 try:
     vs = cached_vector_stats()
@@ -121,25 +119,19 @@ if prompt:
                 }
             )
         except Exception as exc:
-            from src.gemini_debug import record_ai_failure
-            from src.gemini_key_manager import is_all_keys_exhausted_error
-            from src.gemini_status_ui import render_ai_debug_expander
+            from src.gemini_status_ui import render_gemini_all_keys_failed_warning
 
-            record_ai_failure(exc, stage="pm_chatbot")
-            print(f"[AI DEBUG] chatbot exception: {exc}", flush=True)
-            friendly = (
-                "AI analysis is temporarily unavailable. "
-                "The dashboard is displaying the most recent successfully analyzed insights. "
-                "Please try again later."
-            )
-            st.warning(friendly)
-            if is_all_keys_exhausted_error(exc):
-                st.caption("Cause: all configured Gemini API keys failed.")
-            else:
-                st.caption(f"Cause: `{type(exc).__name__}: {exc}`")
-            render_ai_debug_expander(exc, expanded=True)
+            render_gemini_all_keys_failed_warning(exc)
             st.session_state.pm_messages.append(
-                {"role": "assistant", "content": friendly, "evidence": []}
+                {
+                    "role": "assistant",
+                    "content": (
+                        "AI insights are temporarily unavailable. "
+                        "The dashboard is displaying the most recent successfully analyzed insights. "
+                        "Please try again later."
+                    ),
+                    "evidence": [],
+                }
             )
 
 if st.button("Clear conversation"):

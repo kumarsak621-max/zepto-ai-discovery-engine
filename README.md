@@ -44,7 +44,7 @@ zepto/
 └── src/
     ├── config.py
     ├── gemini_key_manager.py   # Multi-key failover + stats
-    ├── gemini_status_ui.py     # Gemini API Status admin panel
+    ├── gemini_status_ui.py     # User-facing AI unavailable warning only
     ├── gemini_analysis.py
     ├── discovery_insights.py
     ├── insights_ui.py
@@ -101,16 +101,11 @@ When a Gemini request fails due to rate limits, quota exhaustion, timeouts, or t
 2. Retries with exponential backoff  
 3. Continues until a working key succeeds  
 
-If every key fails, analysis/chatbot use evidence-based fallbacks and show a clear error — the app does not crash.
+If every key fails, analysis/chatbot use evidence-based fallbacks and show:
 
-Home page → **Gemini API Status** shows:
+> AI insights are temporarily unavailable. The dashboard is displaying the most recent successfully analyzed insights. Please try again later.
 
-- Total Keys Loaded  
-- Active Key (e.g. `Key 2 of 4`)  
-- Successful / Failed Requests  
-- Failovers  
-- Current Gemini Model  
-- Last error (keys never displayed)
+The app does not crash. Production UI never displays API keys, model internals, failover counters, or stack traces.
 
 ### Streamlit Cloud Secrets
 
