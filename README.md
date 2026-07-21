@@ -103,7 +103,7 @@ When a Gemini request fails due to rate limits, quota exhaustion, timeouts, or t
 
 If every key fails, analysis/chatbot use evidence-based fallbacks and show:
 
-> AI insights are temporarily unavailable. The dashboard is displaying the most recent successfully analyzed insights. Please try again later.
+> AI analysis is temporarily unavailable. The dashboard is displaying the most recent successfully analyzed insights. Please try again later.
 
 The app does not crash. Production UI never displays API keys, model internals, failover counters, or stack traces.
 

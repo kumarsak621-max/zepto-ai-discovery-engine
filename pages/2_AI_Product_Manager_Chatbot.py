@@ -126,7 +126,7 @@ if prompt:
                 {
                     "role": "assistant",
                     "content": (
-                        "AI insights are temporarily unavailable. "
+                        "AI analysis is temporarily unavailable. "
                         "The dashboard is displaying the most recent successfully analyzed insights. "
                         "Please try again later."
                     ),
