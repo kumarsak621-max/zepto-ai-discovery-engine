@@ -75,6 +75,24 @@ def ensure_live_reviews_loaded(*, force: bool = False) -> dict[str, Any]:
                     "Apple App Store reviews could not be refreshed right now. "
                     "Google Play Store reviews are still available and shown below."
                 )
+            playstore_issue = any(
+                ("Google Play" in m or "Play Store" in m)
+                and any(
+                    tok in m
+                    for tok in ("unavailable", "no reviews", "failed", "error")
+                )
+                for m in msgs
+            )
+            apple_count = int(result.get("appstore_count") or 0)
+            if apple_count <= 0:
+                apple_count = int(
+                    (get_collection_stats().get("by_source") or {}).get("appstore") or 0
+                )
+            if playstore_issue and apple_count > 0 and not appstore_issue:
+                warning = (
+                    "Google Play Store reviews could not be refreshed right now. "
+                    "Apple App Store reviews are still available and shown below."
+                )
         elif result.get("status") == "skipped":
             warning = ""
         else:
@@ -144,6 +162,16 @@ def render_auto_status_sidebar() -> None:
         f"Google Play Store: {meta.get('playstore_count', 0)} · "
         f"Apple App Store: {meta.get('appstore_count', 0)} · "
         f"Total: {meta.get('merged_count', 0)}"
+    )
+    st.sidebar.caption(
+        f"Live · Play: {int(meta.get('playstore_live_count') or 0)} · "
+        f"Apple: {int(meta.get('appstore_live_count') or 0)}"
+    )
+    st.sidebar.caption(
+        f"Last sync · Play: **{format_last_updated(meta.get('playstore_last_sync') or meta.get('last_updated'))}**"
+    )
+    st.sidebar.caption(
+        f"Last sync · Apple: **{format_last_updated(meta.get('appstore_last_sync') or meta.get('last_updated'))}**"
     )
     st.sidebar.caption(
         f"Sources: Google Play Store (`{PLAYSTORE_APP_ID}`)"

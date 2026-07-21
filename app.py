@@ -263,11 +263,31 @@ div[data-testid="stMetric"] {
         w1[0].metric("Total Reviews", f"{total_reviews:,}")
         w1[1].metric("Google Play Store Reviews", f"{playstore:,}")
         w1[2].metric("Apple App Store Reviews", f"{appstore:,}")
+        play_live = int(
+            warehouse.get("playstore_live_count")
+            or live_meta.get("playstore_live_count")
+            or 0
+        )
+        apple_live = int(
+            warehouse.get("appstore_live_count")
+            or live_meta.get("appstore_live_count")
+            or 0
+        )
         st.caption(
             f"Total = Google Play Store + Apple App Store (deduplicated). "
-            f"Live Reviews: {live_reviews:,} · "
+            f"Live Reviews: {live_reviews:,} "
+            f"(Play: {play_live:,} · Apple: {apple_live:,}) · "
             f"Live Date Range: {warehouse.get('live_date_range') or '06 Jul 2026 → Latest'} · "
             f"Next Refresh: {_format_last_updated(warehouse.get('next_refresh_time') or refresh.get('next_refresh_at'))}"
+        )
+        sync_cols = st.columns(2)
+        sync_cols[0].caption(
+            f"Last sync · Google Play Store: "
+            f"**{_format_last_updated(live_meta.get('playstore_last_sync') or warehouse.get('playstore_last_sync') or live_meta.get('last_updated'))}**"
+        )
+        sync_cols[1].caption(
+            f"Last sync · Apple App Store: "
+            f"**{_format_last_updated(live_meta.get('appstore_last_sync') or warehouse.get('appstore_last_sync') or live_meta.get('last_updated'))}**"
         )
         w2 = st.columns(3)
         w2[0].metric("New Reviews Today", f"{int(warehouse.get('new_reviews_today') or 0):,}")
@@ -341,7 +361,13 @@ div[data-testid="stMetric"] {
             f"**Total Reviews:** {total_reviews:,}"
         )
         st.caption(
+            f"Live · Play: {int(warehouse.get('playstore_live_count') or live_meta.get('playstore_live_count') or 0):,} · "
+            f"Apple: {int(warehouse.get('appstore_live_count') or live_meta.get('appstore_live_count') or 0):,} · "
             f"Last Updated: {_format_last_updated(live_meta.get('last_updated'))}"
+        )
+        st.caption(
+            f"Last sync · Play: {_format_last_updated(live_meta.get('playstore_last_sync') or live_meta.get('last_updated'))} · "
+            f"Apple: {_format_last_updated(live_meta.get('appstore_last_sync') or live_meta.get('last_updated'))}"
         )
 
     try:

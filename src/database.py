@@ -735,6 +735,7 @@ def get_review_warehouse_stats(
     store_live = len(apply_source_date_filter(store_rows, data_source="live"))
 
     by_source = {"playstore": 0, "appstore": 0}
+    live_by_source = {"playstore": 0, "appstore": 0}
     new_today = 0
     new_week = 0
     latest_review: datetime | None = None
@@ -755,6 +756,8 @@ def get_review_warehouse_stats(
         if cal is not None and cal >= LIVE_START_DATE:
             if latest_live_date is None or cal > latest_live_date:
                 latest_live_date = cal
+            if src in live_by_source:
+                live_by_source[src] += 1
         if fetched and fetched >= today_cutoff:
             new_today += 1
         if fetched and fetched >= week_cutoff:
@@ -764,12 +767,17 @@ def get_review_warehouse_stats(
         if fetched and (last_sync is None or fetched > last_sync):
             last_sync = fetched
 
+    playstore_last_sync = None
+    appstore_last_sync = None
     try:
         from src.data_pipeline import get_live_meta
 
-        meta_ts = _parse_iso((get_live_meta() or {}).get("last_updated"))
+        live_meta = get_live_meta() or {}
+        meta_ts = _parse_iso(live_meta.get("last_updated"))
         if meta_ts:
             last_sync = meta_ts
+        playstore_last_sync = live_meta.get("playstore_last_sync")
+        appstore_last_sync = live_meta.get("appstore_last_sync")
     except Exception:
         pass
 
@@ -783,6 +791,8 @@ def get_review_warehouse_stats(
 
     play_n = by_source.get("playstore", 0)
     apple_n = by_source.get("appstore", 0)
+    play_live_n = live_by_source.get("playstore", 0)
+    apple_live_n = live_by_source.get("appstore", 0)
     return {
         "total_reviews": store_total if store_total > 0 else total,
         "total_historical": total,  # legacy key → full warehouse
@@ -792,10 +802,15 @@ def get_review_warehouse_stats(
         "warehouse_all_sources": total,
         "playstore_count": play_n,
         "appstore_count": apple_n,
+        "playstore_live_count": play_live_n,
+        "appstore_live_count": apple_live_n,
         "store_total": play_n + apple_n,
+        "store_live_total": play_live_n + apple_live_n,
         "new_reviews_today": new_today,
         "new_reviews_this_week": new_week,
         "last_sync_time": last_sync.isoformat() if last_sync else None,
+        "playstore_last_sync": playstore_last_sync,
+        "appstore_last_sync": appstore_last_sync,
         "next_refresh_time": next_refresh,
         "latest_review_date": latest_review.isoformat() if latest_review else None,
         "latest_live_review_date": (

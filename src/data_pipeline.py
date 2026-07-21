@@ -197,11 +197,36 @@ def save_merged_reviews_csv(records: list[dict[str, Any]]) -> str:
 
 def save_live_meta(counts: dict[str, Any], *, forced: bool = False) -> dict[str, Any]:
     ensure_runtime_dirs()
+    now = datetime.now(timezone.utc).isoformat()
+    previous = get_live_meta() if LIVE_META_PATH.exists() else {}
+    play_n = int(counts.get("playstore_count") or 0)
+    apple_n = int(counts.get("appstore_count") or 0)
+
+    # Preserve last successful sync per source unless this run refreshed that source
+    play_sync = counts.get("playstore_last_sync") or previous.get("playstore_last_sync")
+    apple_sync = counts.get("appstore_last_sync") or previous.get("appstore_last_sync")
+    if play_n > 0 and counts.get("playstore_synced"):
+        play_sync = now
+    if apple_n > 0 and counts.get("appstore_synced"):
+        apple_sync = now
+
     meta = {
-        "last_updated": datetime.now(timezone.utc).isoformat(),
+        "last_updated": now,
         "forced_refresh": forced,
-        "playstore_count": int(counts.get("playstore_count") or 0),
-        "appstore_count": int(counts.get("appstore_count") or 0),
+        "playstore_count": play_n,
+        "appstore_count": apple_n,
+        "playstore_live_count": int(
+            counts.get("playstore_live_count")
+            or previous.get("playstore_live_count")
+            or 0
+        ),
+        "appstore_live_count": int(
+            counts.get("appstore_live_count")
+            or previous.get("appstore_live_count")
+            or 0
+        ),
+        "playstore_last_sync": play_sync,
+        "appstore_last_sync": apple_sync,
         "manual_count": int(counts.get("manual_count") or 0),
         "merged_count": int(counts.get("merged_count") or 0),
         "analyzed_count": int(counts.get("analyzed_count") or 0),
@@ -216,10 +241,17 @@ def get_live_meta() -> dict[str, Any]:
         # Fall back to Play Store cache timestamp
         ts = get_last_updated_timestamp()
         if ts:
-            return {"last_updated": ts}
+            return {"last_updated": ts, "playstore_last_sync": ts}
         return {}
     try:
-        return json.loads(LIVE_META_PATH.read_text(encoding="utf-8"))
+        meta = json.loads(LIVE_META_PATH.read_text(encoding="utf-8"))
+        # Friendly fallbacks so UI always has a per-source sync time when possible
+        last = meta.get("last_updated")
+        if last and not meta.get("playstore_last_sync") and int(meta.get("playstore_count") or 0) > 0:
+            meta["playstore_last_sync"] = last
+        if last and not meta.get("appstore_last_sync") and int(meta.get("appstore_count") or 0) > 0:
+            meta["appstore_last_sync"] = last
+        return meta
     except Exception:
         return {}
 
@@ -368,14 +400,16 @@ def run_live_review_analysis(
                     save_reviews_csv(playstore)
             counts["playstore_count"] = len(playstore)
             collected.extend(playstore)
+            if playstore:
+                counts["playstore_synced"] = 1
             if not playstore:
                 source_messages.append("Google Play returned no reviews.")
         except Exception as exc:
             logger.exception("Google Play collection failed")
             source_messages.append(f"Google Play unavailable: {exc}")
 
-        # --- Step 2: Apple App Store ---
-        _progress(0.40, "Collecting App Store reviews…")
+        # --- Step 2: Apple App Store (always fetch live on refresh/collection) ---
+        _progress(0.40, "Collecting App Store live reviews…")
         if has_appstore():
             try:
                 appstore = collect_appstore_or_empty(
@@ -383,6 +417,8 @@ def run_live_review_analysis(
                 )
                 counts["appstore_count"] = len(appstore)
                 collected.extend(appstore)
+                if appstore:
+                    counts["appstore_synced"] = 1
                 if not appstore:
                     source_messages.append("App Store returned no reviews.")
             except Exception as exc:
@@ -411,6 +447,28 @@ def run_live_review_analysis(
         counts["new_reviews"] = inserted
         live_batch_keys = save_live_batch_keys(merged)
 
+        # Live-window counts per store (for dashboard KPIs)
+        try:
+            from src.config import LIVE_START_DATE
+            from src.review_dates import parse_review_date
+
+            play_live = 0
+            apple_live = 0
+            for row in merged:
+                cal = parse_review_date(row.get("date") or row.get("review_date"))
+                if cal is None or cal < LIVE_START_DATE:
+                    continue
+                src = str(row.get("source") or "").lower()
+                if src == "playstore":
+                    play_live += 1
+                elif src == "appstore":
+                    apple_live += 1
+            counts["playstore_live_count"] = play_live
+            counts["appstore_live_count"] = apple_live
+        except Exception:
+            counts["playstore_live_count"] = 0
+            counts["appstore_live_count"] = 0
+
         # --- Top-up toward MIN_UNIQUE_REVIEWS using real store pages only ---
         warehouse_total = int(get_collection_stats().get("total") or 0)
         top_up_round = 0
@@ -429,9 +487,11 @@ def run_live_review_analysis(
                     country="in",
                 )
                 extra.extend(more_play)
-                counts["playstore_count"] = max(
-                    counts["playstore_count"], len(more_play)
-                )
+                if more_play:
+                    counts["playstore_synced"] = 1
+                    counts["playstore_count"] = max(
+                        counts["playstore_count"], len(more_play)
+                    )
             except Exception as exc:
                 logger.warning("Play Store top-up failed: %s", exc)
                 source_messages.append(f"Play Store top-up stopped: {exc}")
@@ -441,9 +501,11 @@ def run_live_review_analysis(
                         count=max(int(APPSTORE_REVIEW_COUNT), 500)
                     )
                     extra.extend(more_ios)
-                    counts["appstore_count"] = max(
-                        counts["appstore_count"], len(more_ios)
-                    )
+                    if more_ios:
+                        counts["appstore_synced"] = 1
+                        counts["appstore_count"] = max(
+                            counts["appstore_count"], len(more_ios)
+                        )
                 except Exception as exc:
                     logger.warning("App Store top-up failed: %s", exc)
             if not extra:
@@ -463,6 +525,24 @@ def run_live_review_analysis(
         _progress(0.88, "Running Gemini analysis on merged dataset…")
         analyzed = run_analysis(batch_size=max(analyze_limit, len(merged) or 1))
         counts["analyzed_count"] = analyzed
+
+        # Prefer warehouse live counts (full DB) when available
+        try:
+            from src.database import get_review_warehouse_stats
+
+            wh = get_review_warehouse_stats()
+            counts["playstore_live_count"] = int(wh.get("playstore_live_count") or 0)
+            counts["appstore_live_count"] = int(wh.get("appstore_live_count") or 0)
+            counts["playstore_count"] = max(
+                int(counts.get("playstore_count") or 0),
+                int(wh.get("playstore_count") or 0),
+            )
+            counts["appstore_count"] = max(
+                int(counts.get("appstore_count") or 0),
+                int(wh.get("appstore_count") or 0),
+            )
+        except Exception:
+            pass
 
         # --- Step 7: Refresh meta for dashboards / chatbot ---
         live_meta = save_live_meta(counts, forced=force_refresh)

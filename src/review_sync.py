@@ -100,9 +100,24 @@ def sync_reviews(*, force: bool = False) -> dict[str, Any]:
             "merged_count": int(result.get("merged_count") or 0),
             "playstore_count": int(result.get("playstore_count") or 0),
             "appstore_count": int(result.get("appstore_count") or 0),
+            "playstore_live_count": int(result.get("playstore_live_count") or 0),
+            "appstore_live_count": int(result.get("appstore_live_count") or 0),
             "error": result.get("error"),
         }
     )
+    # Mirror per-source sync timestamps from live meta
+    try:
+        from src.data_pipeline import get_live_meta
+
+        live_meta = get_live_meta() or {}
+        meta = save_sync_meta(
+            {
+                "playstore_last_sync": live_meta.get("playstore_last_sync"),
+                "appstore_last_sync": live_meta.get("appstore_last_sync"),
+            }
+        )
+    except Exception:
+        pass
     if result.get("status") == "success":
         try:
             clear_data_caches()

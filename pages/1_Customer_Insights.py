@@ -276,8 +276,14 @@ def _section_warehouse() -> None:
         format_last_updated(warehouse.get("latest_review_date")),
     )
     st.caption(
+        f"Live · Play: **{int(warehouse.get('playstore_live_count') or 0):,}** · "
+        f"Apple: **{int(warehouse.get('appstore_live_count') or 0):,}** · "
         f"Live Date Range: **{warehouse.get('live_date_range') or '06 Jul 2026 → Latest'}** · "
         f"Next Refresh: **{format_last_updated(warehouse.get('next_refresh_time') or _refresh.get('next_refresh_at'))}**"
+    )
+    st.caption(
+        f"Last sync · Google Play Store: **{format_last_updated(warehouse.get('playstore_last_sync'))}** · "
+        f"Apple App Store: **{format_last_updated(warehouse.get('appstore_last_sync'))}**"
     )
 
 
