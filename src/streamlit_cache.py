@@ -23,16 +23,28 @@ def cached_vector_stats() -> dict[str, Any]:
 
 @st.cache_data(ttl=60, show_spinner=False)
 def cached_pm_insights(limit: int = 2000) -> dict[str, Any]:
+    """PM insights over merged Google Play + Apple App Store reviews."""
     from src.database import get_pm_insights
+    from src.review_analytics import apply_review_filters
 
-    return get_pm_insights(limit=limit)
+    reviews = apply_review_filters(
+        data_source="all",
+        platform="both",
+        limit=limit,
+    )
+    return get_pm_insights(reviews=reviews, limit=limit)
 
 
 @st.cache_data(ttl=60, show_spinner=False)
 def cached_reviews(limit: int = 2000) -> list[dict[str, Any]]:
-    from src.database import fetch_all_reviews
+    """Merged Google Play + Apple App Store reviews for dashboards / AI."""
+    from src.review_analytics import apply_review_filters
 
-    return fetch_all_reviews(limit=limit)
+    return apply_review_filters(
+        data_source="all",
+        platform="both",
+        limit=limit,
+    )
 
 
 @st.cache_data(ttl=900, show_spinner=True)

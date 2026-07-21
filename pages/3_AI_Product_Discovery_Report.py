@@ -166,19 +166,53 @@ st.caption(
 )
 
 from src.streamlit_cache import cached_product_discovery_report
+from src.review_source_ui import (
+    ensure_source_data_loaded,
+    render_review_filters,
+    render_review_source_selector,
+)
+
+data_source = render_review_source_selector(key_prefix="pdr")
+ensure_source_data_loaded(data_source, key_prefix="pdr")
+_filters = render_review_filters(key_prefix="pdr")
+platform = _filters["platform"]
 
 try:
     with st.spinner("Generating AI Product Discovery Report from the current review dataset…"):
-        # Fingerprints invalidate the cache when reviews / analysis change
         from src.database import get_collection_stats
+        from src.review_analytics import apply_review_filters
+        from src.product_discovery_report import build_product_discovery_report
+        from src.discovery_insights import build_discovery_dashboard
 
         stats = get_collection_stats()
-        report = cached_product_discovery_report(
-            reviews_fingerprint=str(stats.get("total") or 0),
-            analyzed_fingerprint=str(stats.get("analyzed_count") or 0),
-            source_fingerprint=str(stats.get("last_ai_analysis") or stats.get("last_update") or ""),
+        # Prefer filtered merged store dataset for the report
+        store_reviews = apply_review_filters(
+            data_source=data_source,
+            platform=platform,
             limit=5000,
         )
+        if store_reviews:
+            dash = build_discovery_dashboard(
+                reviews=store_reviews,
+                limit=5000,
+                analysis_mode=data_source,
+            )
+            report = build_product_discovery_report(
+                reviews=dash.get("reviews") or store_reviews,
+                insights=dash.get("insights") or {},
+                discovery=dash.get("discovery") or {},
+                validation=dash.get("validation") or {},
+                limit=5000,
+            )
+        else:
+            report = cached_product_discovery_report(
+                reviews_fingerprint=str(stats.get("total") or 0),
+                analyzed_fingerprint=str(stats.get("analyzed_count") or 0),
+                source_fingerprint=str(
+                    stats.get("last_ai_analysis") or stats.get("last_update") or ""
+                ),
+                limit=5000,
+            )
 except Exception as exc:
     st.error(f"Could not generate the discovery report. Details: {exc}")
     st.info("Existing Dashboard and Customer Insights remain available.")

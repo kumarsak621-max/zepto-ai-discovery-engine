@@ -724,8 +724,15 @@ def get_review_warehouse_stats(
     week_cutoff = now - timedelta(days=7)
 
     rows = fetch_all_reviews(limit=None, db_path=db_path)
+    store_rows = [
+        r
+        for r in rows
+        if str(r.get("source") or "").lower() in {"playstore", "appstore"}
+    ]
     total = len(rows)
+    store_total = len(store_rows)
     live = len(apply_source_date_filter(rows, data_source="live"))
+    store_live = len(apply_source_date_filter(store_rows, data_source="live"))
 
     by_source = {"playstore": 0, "appstore": 0}
     new_today = 0
@@ -774,14 +781,18 @@ def get_review_warehouse_stats(
     except Exception:
         pass
 
+    play_n = by_source.get("playstore", 0)
+    apple_n = by_source.get("appstore", 0)
     return {
-        "total_reviews": total,
+        "total_reviews": store_total if store_total > 0 else total,
         "total_historical": total,  # legacy key → full warehouse
-        "total_live": live,
-        "older_reviews": max(0, total - live),
-        "merged_reviews": total,
-        "playstore_count": by_source.get("playstore", 0),
-        "appstore_count": by_source.get("appstore", 0),
+        "total_live": store_live if store_live > 0 else live,
+        "older_reviews": max(0, (store_total or total) - (store_live or live)),
+        "merged_reviews": store_total if store_total > 0 else total,
+        "warehouse_all_sources": total,
+        "playstore_count": play_n,
+        "appstore_count": apple_n,
+        "store_total": play_n + apple_n,
         "new_reviews_today": new_today,
         "new_reviews_this_week": new_week,
         "last_sync_time": last_sync.isoformat() if last_sync else None,
@@ -793,5 +804,5 @@ def get_review_warehouse_stats(
         "live_date_range": live_range_label(latest_live_date),
         "live_window_days": live_window_days,
         "min_unique_target": MIN_UNIQUE_REVIEWS,
-        "meets_min_unique": total >= MIN_UNIQUE_REVIEWS,
+        "meets_min_unique": (store_total or total) >= MIN_UNIQUE_REVIEWS,
     }

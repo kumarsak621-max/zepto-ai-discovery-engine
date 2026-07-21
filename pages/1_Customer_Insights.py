@@ -1084,9 +1084,15 @@ with st.expander("AI Summary & structured per-review analysis"):
         sample = df.copy()
         if filter_theme != "All" and "theme" in sample.columns:
             sample = sample[sample["theme"] == filter_theme]
+        if "source" in sample.columns:
+            from src.review_viewer import _platform_label
+
+            sample = sample.copy()
+            sample["Source"] = sample["source"].map(_platform_label)
         cols = [
             c
             for c in [
+                "Source",
                 "source",
                 "sentiment",
                 "theme",
@@ -1101,6 +1107,9 @@ with st.expander("AI Summary & structured per-review analysis"):
             ]
             if c in sample.columns
         ]
+        # Prefer friendly Source column; drop raw source when both exist
+        if "Source" in cols and "source" in cols:
+            cols = [c for c in cols if c != "source"]
         if cols:
             st.dataframe(sample[cols].head(25), width="stretch", hide_index=True)
         else:

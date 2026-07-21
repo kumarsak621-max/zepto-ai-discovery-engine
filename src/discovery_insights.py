@@ -1018,23 +1018,57 @@ def generate_gemini_discovery(
         }
 
 
+def _store_source_counts(reviews: list[dict[str, Any]]) -> tuple[int, int, int]:
+    """Count Google Play / Apple App Store rows in a review list."""
+    play = 0
+    apple = 0
+    for row in reviews or []:
+        src = str(row.get("source") or "").strip().lower()
+        if src in {"playstore", "google play", "google_play", "play"}:
+            play += 1
+        elif src in {"appstore", "apple app store", "app_store", "ios", "apple"}:
+            apple += 1
+    return play, apple, play + apple
+
+
 def build_discovery_dashboard(
     reviews: list[dict[str, Any]] | None = None,
     *,
     limit: int = 2000,
     analysis_mode: str = "all",
 ) -> dict[str, Any]:
-    """Full payload for the PM Discovery dashboard. Never raises to the UI layer."""
-    from src.database import fetch_all_reviews
+    """Full payload for the PM Discovery dashboard. Never raises to the UI layer.
 
-    try:
-        reviews = reviews if reviews is not None else fetch_all_reviews(limit=limit)
-    except Exception as exc:
-        logger.exception("fetch_all_reviews failed")
+    Default dataset is Google Play + Apple App Store only (merged / deduplicated).
+    """
+    fetch_error = ""
+    if reviews is None:
+        try:
+            from src.database import fetch_reviews_filtered
+
+            reviews = fetch_reviews_filtered(
+                data_source=analysis_mode or "all",
+                platforms=["playstore", "appstore"],
+                limit=limit,
+            )
+        except Exception as exc:
+            logger.exception("store review fetch failed for discovery dashboard")
+            try:
+                from src.database import fetch_all_reviews
+
+                raw = fetch_all_reviews(limit=limit)
+                reviews = [
+                    r
+                    for r in raw
+                    if str(r.get("source") or "").lower() in {"playstore", "appstore"}
+                ]
+                fetch_error = str(exc)
+            except Exception as exc2:
+                logger.exception("fallback store fetch failed")
+                reviews = []
+                fetch_error = f"{exc}; {exc2}"
+    if reviews is None:
         reviews = []
-        fetch_error = str(exc)
-    else:
-        fetch_error = ""
 
     try:
         insights = (
@@ -1113,20 +1147,24 @@ def build_discovery_dashboard(
     except Exception:
         stats = {"by_source": {}, "total": len(reviews)}
 
-    by_src = stats.get("by_source") or {}
-    play_db = int(by_src.get("playstore") or 0)
-    apple_db = int(by_src.get("appstore") or 0)
-    play_n = play_db or int(live_meta.get("playstore_count") or 0)
-    apple_n = apple_db or int(live_meta.get("appstore_count") or 0)
-    # Merged store reviews = Play + Apple only (excludes reddit/social)
-    merged_n = play_n + apple_n
+    # Prefer counts from the analyzed review set (respects Live/All + Store filters)
+    play_n, apple_n, merged_n = _store_source_counts(reviews)
     if merged_n <= 0:
-        merged_n = int(
-            live_meta.get("merged_count")
-            or insights.get("total_reviews")
-            or len(reviews)
-            or 0
+        by_src = stats.get("by_source") or {}
+        play_n = int(by_src.get("playstore") or 0) or int(
+            live_meta.get("playstore_count") or 0
         )
+        apple_n = int(by_src.get("appstore") or 0) or int(
+            live_meta.get("appstore_count") or 0
+        )
+        merged_n = play_n + apple_n
+        if merged_n <= 0:
+            merged_n = int(
+                live_meta.get("merged_count")
+                or insights.get("total_reviews")
+                or len(reviews)
+                or 0
+            )
 
     payload = {
         "reviews": reviews,

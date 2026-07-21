@@ -211,10 +211,11 @@ div[data-testid="stMetric"] {
             discovery = discovery_dash.get("discovery") or {}
         except Exception:
             discovery = {}
+            discovery_dash = {}
     except Exception as exc:
         st.error(f"Could not load dashboard metrics right now. Details: {exc}")
         stats, insights, live_meta = {"total": 0, "by_sentiment": {}}, {}, {}
-        warehouse, refresh, discovery = {}, {}, {}
+        warehouse, refresh, discovery, discovery_dash = {}, {}, {}, {}
 
     # Prominent AI intelligence hero (additive — does not replace existing KPIs)
     render_ai_intelligence_section(
@@ -225,9 +226,14 @@ div[data-testid="stMetric"] {
         processing=False,
     )
 
-    by_sentiment = stats.get("by_sentiment") or {}
-    positive = int(by_sentiment.get("Positive") or 0)
-    negative = int(by_sentiment.get("Negative") or 0)
+    # Sentiment KPIs from merged Play + Apple dataset (not reddit/social)
+    sent = (discovery_dash.get("sentiment") or {}) if discovery_dash else {}
+    positive = int(sent.get("positive") or 0)
+    negative = int(sent.get("negative") or 0)
+    if positive <= 0 and negative <= 0:
+        by_sentiment = stats.get("by_sentiment") or {}
+        positive = int(by_sentiment.get("Positive") or 0)
+        negative = int(by_sentiment.get("Negative") or 0)
     playstore = int(live_meta.get("playstore_count") or 0)
     appstore = int(live_meta.get("appstore_count") or 0)
     # Fallback to DB source breakdown when meta is empty

@@ -72,12 +72,20 @@ def render_review_filters(*, key_prefix: str = "ci") -> dict[str, Any]:
     )
     f1, f2 = st.columns([1, 2])
     with f1:
+        plat_key = f"{key_prefix}_platform"
+        # Migrate legacy selectbox values so Streamlit does not crash on option change
+        legacy = st.session_state.get(plat_key)
+        if legacy == "Google Play Store only":
+            st.session_state[plat_key] = "Google Play Store"
+        elif legacy == "Apple App Store only":
+            st.session_state[plat_key] = "Apple App Store"
+
         platform_label = st.selectbox(
             "Store",
             options=[
                 "All Reviews",
-                "Google Play Store only",
-                "Apple App Store only",
+                "Google Play Store",
+                "Apple App Store",
             ],
             index=0,
             key=f"{key_prefix}_platform",
@@ -93,6 +101,9 @@ def render_review_filters(*, key_prefix: str = "ci") -> dict[str, Any]:
 
     platform = {
         "All Reviews": "both",
+        "Google Play Store": "playstore",
+        "Apple App Store": "appstore",
+        # Legacy labels from earlier UI
         "Google Play Store only": "playstore",
         "Apple App Store only": "appstore",
     }.get(platform_label, "both")

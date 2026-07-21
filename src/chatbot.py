@@ -118,6 +118,15 @@ def json_dumps_safe(obj: Any) -> str:
         return str(obj)[:400]
 
 
+def _source_display(source: Any) -> str:
+    key = str(source or "").strip().lower()
+    if key in {"playstore", "google play", "google_play", "google play store", "play"}:
+        return "Google Play Store"
+    if key in {"appstore", "apple app store", "app_store", "ios", "apple", "apple store"}:
+        return "Apple App Store"
+    return str(source or "Unknown").replace("_", " ").title()
+
+
 def _summarize_latest_reviews(n: int = 10) -> dict[str, Any]:
     """Return a factual summary of newest reviews in the local DB (never invents)."""
     from src.config import LIVE_CHAT_SOURCES
@@ -168,7 +177,7 @@ def _summarize_latest_reviews(n: int = 10) -> dict[str, Any]:
     evidence = [
         {
             "text": e.get("text") or "",
-            "source": e.get("source"),
+            "source": _source_display(e.get("source")),
             "sentiment": e.get("sentiment"),
             "theme": e.get("theme"),
             "user_intent": e.get("user_intent"),
@@ -244,7 +253,7 @@ def ask_product_manager(
     normalized = [
         {
             "text": e.get("text") or "",
-            "source": e.get("source"),
+            "source": _source_display(e.get("source")),
             "sentiment": e.get("sentiment"),
             "theme": e.get("theme"),
             "user_intent": e.get("user_intent"),
